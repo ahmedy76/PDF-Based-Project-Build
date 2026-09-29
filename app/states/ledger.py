@@ -1,0 +1,1340 @@
+import reflex as rx
+
+import logging
+import re
+import secrets
+from contextlib import suppress
+from datetime import date, timedelta
+from decimal import Decimal
+from typing import Any
+from uuid import UUID
+
+import reflex_xy
+from sqlalchemy import select, func, tuple_
+from app import models as m
+from app.states.auth import AuthState, digest, now
+
+
+class LedgerState(rx.State):
+    ready: bool = False
+    message: str = ""
+    household_name: str = ""
+    currency: str = "SAR"
+    owner: bool = False
+    households: list[dict[str, str]] = []
+    accounts: list[dict[str, str]] = []
+    archived_accounts: list[dict[str, str]] = []
+    archived_total: str = "0.00"
+    has_archived_balance: bool = False
+    closing_name: str = ""
+    closing_balance: str = ""
+    categories: list[dict[str, str]] = []
+    archived_categories: list[dict[str, str]] = []
+    transactions: list[dict[str, str]] = []
+    budgets: list[dict[str, str]] = []
+    dashboard_budgets: list[dict[str, str]] = []
+    invitations: list[dict[str, str]] = []
+    notifications: list[dict[str, str]] = []
+    preferences: list[dict[str, str]] = []
+    total: str = "0.00"
+    income: str = "0.00"
+    expense: str = "0.00"
+    saving: str = "0.00"
+    saving_rate: str = "0.0"
+    period: str = "current"
+    report_start: str = ""
+    report_end: str = ""
+    report_range_label: str = ""
+    report_income: str = "0.00"
+    report_expense: str = "0.00"
+    report_saving: str = "0.00"
+    report_labels: list[str] = []
+    report_values: list[float] = []
+    trend_dates: list[str] = []
+    trend_income: list[float] = []
+    trend_expense: list[float] = []
+    filter_kind: str = ""
+    filter_account: str = ""
+    filter_category: str = ""
+    filter_start: str = ""
+    filter_end: str = ""
+    budget_month: str = ""
+    editor: str = ""
+    edit_id: str = ""
+    draft: dict[str, str] = {
+        "name": "",
+        "account_type": "cash",
+        "opening_balance": "0",
+        "opening_date": "",
+        "account_id": "",
+        "category_id": "",
+        "kind": "expense",
+        "amount": "",
+        "transaction_date": "",
+        "description": "",
+        "month": "",
+        "threshold": "80",
+    }
+    delete_kind: str = ""
+    delete_id: str = ""
+    invite_link: str = ""
+
+    @reflex_xy.data
+    def spending_data(self) -> dict[str, list[str] | list[float]]:
+        return {"category": self.report_labels, "amount": self.report_values}
+
+    @reflex_xy.data
+    def trend_data(self) -> dict[str, list[str] | list[float]]:
+        return {
+            "day": self.trend_dates,
+            "income": self.trend_income,
+            "expense": self.trend_expense,
+        }
+
+    @rx.var
+    def pending_count(self) -> int:
+        return sum(x["status"] == "pending" for x in self.invitations)
+
+    @rx.var
+    def visible_transactions(self) -> list[dict[str, str]]:
+        return [
+            x
+            for x in self.transactions
+            if (not self.filter_kind or x["kind"] == self.filter_kind)
+            and (
+                not self.filter_account
+                or x["account_id"] == self.filter_account
+            )
+            and (
+                not self.filter_category
+                or x["category_id"] == self.filter_category
+            )
+            and (
+                not self.filter_start
+                or x["transaction_date"] >= self.filter_start
+            )
+            and (
+                not self.filter_end or x["transaction_date"] <= self.filter_end
+            )
+        ]
+
+    @rx.var
+    def filter_account_options(self) -> list[dict[str, str]]:
+        return self.accounts + self.archived_accounts
+
+    @rx.var
+    def transaction_account_options(self) -> list[dict[str, str]]:
+        closed = [
+            a
+            for a in self.archived_accounts
+            if self.editor == "transaction"
+            and self.edit_id
+            and a["id"] == self.draft["account_id"]
+        ]
+        return closed if closed else self.accounts
+
+    @rx.var
+    def editing_archived_category(self) -> bool:
+        if self.editor != "transaction" or not self.edit_id:
+            return False
+        original = next(
+            (t for t in self.transactions if t["id"] == self.edit_id), None
+        )
+        return bool(
+            original
+            and original["category_id"] == self.draft.get("category_id", "")
+            and any(
+                c["id"] == original["category_id"]
+                for c in self.archived_categories
+            )
+        )
+
+    @rx.var
+    def transaction_category_options(self) -> list[dict[str, str]]:
+        if not self.editing_archived_category:
+            return self.categories
+        return self.categories + [
+            {**c, "name": f"{c['name']} (مؤرشفة · لهذه المعاملة فقط)"}
+            for c in self.archived_categories
+            if c["id"] == self.draft["category_id"]
+        ]
+
+    @rx.var
+    def filter_category_options(self) -> list[dict[str, str]]:
+        return self.categories + self.archived_categories
+
+    def _validate_transaction_category(self, record, category, kind):
+        if category.kind != kind:
+            raise ValueError("اختر فئة متوافقة مع نوع المعاملة.")
+        if category.is_archived and (
+            record is None or record.category_id != category.id
+        ):
+            raise ValueError(
+                "لا يمكن استخدام فئة مؤرشفة لمعاملة جديدة أو نقل معاملة إليها."
+            )
+
+    def _account_balances(self, accounts, txs):
+        balances = {a.id: a.opening_balance for a in accounts}
+        for t in txs:
+            if t.account_id in balances:
+                balances[t.account_id] += (
+                    t.amount if t.kind == "income" else -t.amount
+                )
+        return balances
+
+    def _validate_transaction_account(self, record, account, original_account):
+        if account.is_archived and (
+            record is None or record.account_id != account.id
+        ):
+            raise ValueError(
+                "لا يمكن تسجيل معاملة جديدة على حساب مغلق أو نقل معاملة إليه."
+            )
+        if (
+            original_account is not None
+            and original_account.is_archived
+            and record.account_id != account.id
+        ):
+            raise ValueError(
+                "تصحيح معاملة الحساب المغلق يجب أن يبقى على الحساب نفسه."
+            )
+
+    def _money(self, value: str, positive: bool = False) -> Decimal:
+        if not re.fullmatch(r"[+-]?(?:[0-9]+(?:\.[0-9]+)?|\.[0-9]+)", value):
+            raise ValueError("أدخل مبلغًا رقميًا صالحًا.")
+        amount = Decimal(value)
+        if (
+            not amount.is_finite()
+            or abs(amount) >= Decimal("1000000000000000")
+            or amount.as_tuple().exponent < -4
+            or (positive and amount <= 0)
+        ):
+            raise ValueError(
+                "المبلغ غير صالح. استخدم حتى أربع منازل عشرية ومبلغًا موجبًا للمعاملات والميزانيات."
+            )
+        return amount
+
+    def _record(self, db, model, record_id, household_id):
+        record = db.scalar(
+            select(model)
+            .where(
+                model.id == UUID(record_id), model.household_id == household_id
+            )
+            .with_for_update()
+        )
+        if record is None:
+            raise ValueError("العنصر غير موجود أو غير متاح لهذه الأسرة.")
+        return record
+
+    def _notify(self, db, household_id, user_id, kind, title, **refs):
+        pref = db.scalar(
+            select(m.NotificationPreference).where(
+                m.NotificationPreference.user_id == user_id,
+                m.NotificationPreference.kind == kind,
+                m.NotificationPreference.channel == "in_app",
+            )
+        )
+        if pref and not pref.enabled:
+            return
+        db.add(
+            m.Notification(
+                household_id=household_id,
+                recipient_user_id=user_id,
+                member_user_id=user_id,
+                kind=kind,
+                title=title,
+                channel="in_app",
+                delivery_status="sent",
+                sent_at=now(),
+                **refs,
+            )
+        )
+
+    def _expire(self, db, household_id):
+        for invite in db.scalars(
+            select(m.PartnerInvitation)
+            .where(
+                m.PartnerInvitation.household_id == household_id,
+                m.PartnerInvitation.status == "pending",
+                m.PartnerInvitation.expires_at <= now(),
+            )
+            .with_for_update()
+        ).all():
+            invite.status, invite.resolved_at = "expired", now()
+
+    @staticmethod
+    def _validate_report_range(
+        start_value: str, end_value: str, today: date
+    ) -> tuple[date, date]:
+        if not start_value or not end_value:
+            raise ValueError("اختر تاريخ البداية والنهاية لعرض الفترة.")
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}", start_value
+        ) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_value):
+            raise ValueError(
+                "أدخل تاريخَي البداية والنهاية بصيغة صحيحة (YYYY-MM-DD)."
+            )
+        try:
+            start, end = (
+                date.fromisoformat(start_value),
+                date.fromisoformat(end_value),
+            )
+        except ValueError as e:
+            raise ValueError(
+                "أدخل تاريخَي البداية والنهاية بصيغة صحيحة (YYYY-MM-DD)."
+            ) from e
+        if start > end:
+            raise ValueError(
+                "تاريخ البداية يجب أن يسبق تاريخ النهاية أو يساويه."
+            )
+        if end > today:
+            raise ValueError("تاريخ النهاية لا يمكن أن يكون بعد اليوم.")
+        if (end - start).days + 1 > 366:
+            raise ValueError(
+                "الفترة المخصصة لا يمكن أن تتجاوز 366 يومًا شاملة البداية والنهاية."
+            )
+        return start, end
+
+    def _report_bounds(self, today: date) -> tuple[date, date]:
+        start = today.replace(day=1)
+        end = today
+        if self.period == "custom":
+            return self._validate_report_range(
+                self.report_start, self.report_end, today
+            )
+        if self.period == "previous":
+            end = start - timedelta(days=1)
+            start = end.replace(day=1)
+        elif self.period == "three":
+            for _ in range(2):
+                start = (start - timedelta(days=1)).replace(day=1)
+        return start, end
+
+    def _budget_row(self, budget, category_names, spending):
+        spent = spending.get(
+            (budget.year, budget.month, budget.category_id), Decimal(0)
+        )
+        pct = (
+            spent / budget.amount * 100
+            if budget.amount
+            else Decimal(100 if spent else 0)
+        )
+        status = (
+            "تجاوز الحد"
+            if spent > budget.amount
+            else (
+                "قرب الحد"
+                if pct >= budget.alert_threshold_percent
+                else "ضمن الميزانية"
+            )
+        )
+        return {
+            "id": str(budget.id),
+            "name": category_names.get(budget.category_id, ""),
+            "category_id": str(budget.category_id),
+            "amount": str(budget.amount),
+            "limit": f"{budget.amount:,.2f}",
+            "spent": f"{spent:,.2f}",
+            "percent": f"{pct:.1f}",
+            "progress": str(min(100, pct)),
+            "status": status,
+            "month": f"{budget.year:04d}-{budget.month:02d}",
+            "threshold": str(budget.alert_threshold_percent),
+        }
+
+    def _load(self, db, user, member):
+        hid = member.household_id
+        household = db.get(m.Household, hid)
+        self.household_name, self.currency = household.name, household.currency
+        self.owner = member.role == "owner"
+        self.households = [
+            {"id": str(h.id), "name": h.name}
+            for h in db.scalars(
+                select(m.Household)
+                .join(
+                    m.HouseholdMembership,
+                    m.HouseholdMembership.household_id == m.Household.id,
+                )
+                .where(
+                    m.HouseholdMembership.user_id == user.id,
+                    m.HouseholdMembership.status == "active",
+                    m.Household.status == "active",
+                )
+            ).all()
+        ]
+        categories = db.scalars(
+            select(m.Category)
+            .where(m.Category.household_id == hid)
+            .order_by(m.Category.name)
+        ).all()
+        self.categories = [
+            {"id": str(c.id), "name": c.name, "kind": c.kind}
+            for c in categories
+            if not c.is_archived
+        ]
+        self.archived_categories = [
+            {"id": str(c.id), "name": c.name, "kind": c.kind}
+            for c in categories
+            if c.is_archived
+        ]
+        category_names = {c.id: c.name for c in categories}
+        accounts = db.scalars(
+            select(m.FinancialAccount)
+            .where(m.FinancialAccount.household_id == hid)
+            .order_by(m.FinancialAccount.created_at)
+        ).all()
+        account_names = {a.id: a.name for a in accounts}
+        txs = db.scalars(
+            select(m.Transaction)
+            .where(
+                m.Transaction.household_id == hid,
+                m.Transaction.deleted_at.is_(None),
+            )
+            .order_by(
+                m.Transaction.transaction_date.desc(),
+                m.Transaction.created_at.desc(),
+            )
+        ).all()
+        balances = self._account_balances(accounts, txs)
+        account_rows = [
+            {
+                "id": str(a.id),
+                "name": a.name,
+                "account_type": a.account_type,
+                "opening_balance": str(a.opening_balance),
+                "opening_date": a.opening_date.isoformat(),
+                "balance": f"{balances[a.id]:,.2f}",
+            }
+            for a in accounts
+        ]
+        self.accounts = [
+            row for row, a in zip(account_rows, accounts) if not a.is_archived
+        ]
+        self.archived_accounts = [
+            row for row, a in zip(account_rows, accounts) if a.is_archived
+        ]
+        active_balance = sum(
+            (balances[a.id] for a in accounts if not a.is_archived), Decimal(0)
+        )
+        archived_balance = sum(
+            (balances[a.id] for a in accounts if a.is_archived), Decimal(0)
+        )
+        self.total = f"{active_balance:,.2f}"
+        self.archived_total = f"{archived_balance:,.2f}"
+        self.has_archived_balance = any(
+            a.is_archived and balances[a.id] != 0 for a in accounts
+        )
+        self.transactions = [
+            {
+                "id": str(t.id),
+                "name": t.description
+                or category_names.get(t.category_id, "معاملة"),
+                "description": t.description,
+                "kind": t.kind,
+                "amount": str(t.amount),
+                "display_amount": f"{t.amount:,.2f}",
+                "account_id": str(t.account_id),
+                "account": account_names.get(t.account_id, "حساب سابق"),
+                "category_id": str(t.category_id),
+                "category": category_names.get(t.category_id, ""),
+                "transaction_date": t.transaction_date.isoformat(),
+            }
+            for t in txs
+        ]
+        today = date.today()
+        start = today.replace(day=1)
+        month_txs = [t for t in txs if start <= t.transaction_date <= today]
+        inc = sum(
+            (t.amount for t in month_txs if t.kind == "income"), Decimal(0)
+        )
+        exp = sum(
+            (t.amount for t in month_txs if t.kind == "expense"), Decimal(0)
+        )
+        self.income, self.expense, self.saving = (
+            f"{inc:,.2f}",
+            f"{exp:,.2f}",
+            f"{inc - exp:,.2f}",
+        )
+        self.saving_rate = f"{(inc - exp) / inc * 100:.1f}" if inc else "0.0"
+        if not self.budget_month:
+            self.budget_month = today.strftime("%Y-%m")
+        budget_date = date.fromisoformat(f"{self.budget_month}-01")
+        requested_months = {
+            (budget_date.year, budget_date.month),
+            (today.year, today.month),
+        }
+        budget_records = db.scalars(
+            select(m.MonthlyCategoryBudget).where(
+                m.MonthlyCategoryBudget.household_id == hid,
+                tuple_(
+                    m.MonthlyCategoryBudget.year,
+                    m.MonthlyCategoryBudget.month,
+                ).in_(sorted(requested_months)),
+            )
+        ).all()
+        spending = {}
+        for t in txs:
+            month_key = (t.transaction_date.year, t.transaction_date.month)
+            if t.kind == "expense" and month_key in requested_months:
+                key = (*month_key, t.category_id)
+                spending[key] = spending.get(key, Decimal(0)) + t.amount
+        budget_rows = [
+            self._budget_row(b, category_names, spending)
+            for b in budget_records
+        ]
+        self.budgets = [
+            row for row in budget_rows if row["month"] == self.budget_month
+        ]
+        self.dashboard_budgets = [
+            row
+            for row in budget_rows
+            if row["month"] == today.strftime("%Y-%m")
+        ]
+        self._expire(db, hid)
+        self.invitations = [
+            {
+                "id": str(i.id),
+                "email": i.email,
+                "status": i.status,
+                "expires": i.expires_at.strftime("%Y-%m-%d"),
+            }
+            for i in db.scalars(
+                select(m.PartnerInvitation)
+                .where(m.PartnerInvitation.household_id == hid)
+                .order_by(m.PartnerInvitation.created_at.desc())
+            ).all()
+        ]
+        self.notifications = [
+            {
+                "id": str(n.id),
+                "title": n.title,
+                "body": n.body,
+                "date": n.created_at.strftime("%Y-%m-%d"),
+                "read": "yes" if n.read_at else "no",
+            }
+            for n in db.scalars(
+                select(m.Notification)
+                .where(
+                    m.Notification.household_id == hid,
+                    m.Notification.recipient_user_id == user.id,
+                    m.Notification.channel == "in_app",
+                )
+                .order_by(m.Notification.created_at.desc())
+            ).all()
+        ]
+        prefs = {
+            p.kind: p.enabled
+            for p in db.scalars(
+                select(m.NotificationPreference).where(
+                    m.NotificationPreference.user_id == user.id,
+                    m.NotificationPreference.channel == "in_app",
+                )
+            ).all()
+        }
+        self.preferences = [
+            {
+                "kind": k,
+                "name": label,
+                "enabled": "yes" if prefs.get(k, True) else "no",
+            }
+            for k, label in [
+                ("invitation_accepted", "قبول الدعوة"),
+                ("partner_transaction", "معاملات الشريك"),
+                ("budget_warning", "الاقتراب من الميزانية"),
+                ("budget_exceeded", "تجاوز الميزانية"),
+            ]
+        ]
+        start, end = self._report_bounds(today)
+        selected = [t for t in txs if start <= t.transaction_date <= end]
+        ri = sum((t.amount for t in selected if t.kind == "income"), Decimal(0))
+        rexp = sum(
+            (t.amount for t in selected if t.kind == "expense"), Decimal(0)
+        )
+        self.report_income, self.report_expense, self.report_saving = (
+            f"{ri:,.2f}",
+            f"{rexp:,.2f}",
+            f"{ri - rexp:,.2f}",
+        )
+        spending = {
+            c.name: sum(
+                (
+                    t.amount
+                    for t in selected
+                    if t.category_id == c.id and t.kind == "expense"
+                ),
+                Decimal(0),
+            )
+            for c in categories
+            if c.kind == "expense"
+        }
+        self.report_labels = list(spending)
+        self.report_values = [float(v) for v in spending.values()]
+        days = [
+            start + timedelta(days=i) for i in range((end - start).days + 1)
+        ]
+        self.trend_dates = [d.isoformat() for d in days]
+        self.trend_income = [
+            float(
+                sum(
+                    (
+                        t.amount
+                        for t in selected
+                        if t.transaction_date == d and t.kind == "income"
+                    ),
+                    Decimal(0),
+                )
+            )
+            for d in days
+        ]
+        self.trend_expense = [
+            float(
+                sum(
+                    (
+                        t.amount
+                        for t in selected
+                        if t.transaction_date == d and t.kind == "expense"
+                    ),
+                    Decimal(0),
+                )
+            )
+            for d in days
+        ]
+        db.commit()
+        self.report_range_label = (
+            f"من {start.isoformat()} إلى {end.isoformat()}"
+        )
+        self.ready = True
+
+    @rx.event
+    async def load(self):
+        self.ready = False
+        self.editor = ""
+        try:
+            auth = await self.get_state(AuthState)
+            success = False
+            async with rx.asession() as db:
+
+                def load_sync(sync_db):
+                    nonlocal success
+                    with suppress(PermissionError):
+                        user, member = auth._household(sync_db)
+                        self._load(sync_db, user, member)
+                        success = True
+
+                await db.run_sync(load_sync)
+            if not success:
+                self.message = ""
+                return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر تحميل البيانات. أعد المحاولة."
+
+    @rx.event
+    async def switch_household(self, data: dict[str, Any]):
+        auth = await self.get_state(AuthState)
+        auth.selected_household = str(data.get("household", ""))
+        self.invite_link = ""
+        yield LedgerState.load
+
+    @rx.event
+    async def set_period(self, period: str):
+        if period not in ("current", "previous", "three"):
+            return
+        self.period = period
+        self.message = ""
+        yield LedgerState.load
+
+    @rx.event
+    async def set_custom_period(self, data: dict[str, Any]):
+        try:
+            start, end = self._validate_report_range(
+                str(data.get("start", "")).strip(),
+                str(data.get("end", "")).strip(),
+                date.today(),
+            )
+        except ValueError as e:
+            self.message = str(e)
+            return
+        self.report_start, self.report_end = start.isoformat(), end.isoformat()
+        self.period = "custom"
+        self.message = ""
+        yield LedgerState.load
+
+    @rx.event
+    def apply_filters(self, data: dict[str, Any]):
+        self.filter_kind = str(data.get("kind", ""))
+        self.filter_account = str(data.get("account", ""))
+        self.filter_category = str(data.get("category", ""))
+        self.filter_start = str(data.get("start", ""))
+        self.filter_end = str(data.get("end", ""))
+        self.message = (
+            "الفترة غير صحيحة."
+            if self.filter_start
+            and self.filter_end
+            and self.filter_start > self.filter_end
+            else ""
+        )
+
+    @rx.event
+    async def change_month(self, data: dict[str, Any]):
+        try:
+            value = str(data.get("month", ""))
+            date.fromisoformat(f"{value}-01")
+            self.budget_month = value
+            yield LedgerState.load
+        except ValueError:
+            self.message = "اختر شهرًا صالحًا."
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "اختر شهرًا صالحًا."
+
+    @rx.event
+    def open_editor(self, kind: str, record_id: str = ""):
+        self.message = ""
+        self.editor, self.edit_id = kind, record_id
+        today = date.today().isoformat()
+        self.draft = {
+            "name": "",
+            "account_type": "cash",
+            "opening_balance": "0",
+            "opening_date": today,
+            "account_id": "",
+            "category_id": "",
+            "kind": "expense",
+            "amount": "",
+            "transaction_date": today,
+            "description": "",
+            "month": self.budget_month or today[:7],
+            "threshold": "80",
+        }
+        rows = {
+            "account": self.accounts,
+            "transaction": self.transactions,
+            "budget": self.budgets + self.dashboard_budgets,
+        }.get(kind, [])
+        record = next((x for x in rows if x["id"] == record_id), {})
+        for key in self.draft:
+            if key in record:
+                self.draft[key] = record[key]
+
+    @rx.event
+    def close_editor(self):
+        self.editor = ""
+        self.delete_id = ""
+
+    @rx.event
+    async def save(self, data: dict[str, Any]):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def save_sync(sync_db):
+                user, member = auth._household(sync_db)
+                hid = member.household_id
+                # Serialize household mutations, including balance-affecting edits.
+                sync_db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == hid)
+                    .with_for_update()
+                )
+                if self.editor == "account":
+                    name = str(data.get("name", "")).strip()
+                    kind = str(data.get("account_type", ""))
+                    if (
+                        not name
+                        or len(name) > 120
+                        or kind
+                        not in (
+                            "cash",
+                            "bank",
+                            "credit_card",
+                            "savings",
+                            "other",
+                        )
+                    ):
+                        raise ValueError("اسم الحساب ونوعه مطلوبان.")
+                    record = (
+                        self._record(
+                            sync_db, m.FinancialAccount, self.edit_id, hid
+                        )
+                        if self.edit_id
+                        else m.FinancialAccount(
+                            household_id=hid,
+                            created_by_user_id=user.id,
+                            currency=sync_db.get(m.Household, hid).currency,
+                        )
+                    )
+                    if record.is_archived:
+                        raise ValueError("الحساب غير متاح.")
+                    opening = date.fromisoformat(
+                        str(data.get("opening_date", ""))
+                    )
+                    if opening > date.today():
+                        raise ValueError(
+                            "تاريخ الافتتاح لا يمكن أن يكون في المستقبل."
+                        )
+                    earliest = (
+                        sync_db.scalar(
+                            select(
+                                func.min(m.Transaction.transaction_date)
+                            ).where(
+                                m.Transaction.household_id == hid,
+                                m.Transaction.account_id == record.id,
+                                m.Transaction.deleted_at.is_(None),
+                            )
+                        )
+                        if self.edit_id
+                        else None
+                    )
+                    if earliest and opening > earliest:
+                        raise ValueError(
+                            "تاريخ الافتتاح يجب أن يسبق معاملات الحساب."
+                        )
+                    record.name, record.account_type = name, kind
+                    record.opening_balance = self._money(
+                        str(data.get("opening_balance", "0"))
+                    )
+                    record.opening_date = opening
+                    sync_db.add(record)
+                elif self.editor == "transaction":
+                    account = self._record(
+                        sync_db,
+                        m.FinancialAccount,
+                        str(data.get("account_id", "")),
+                        hid,
+                    )
+                    category = self._record(
+                        sync_db,
+                        m.Category,
+                        str(data.get("category_id", "")),
+                        hid,
+                    )
+                    kind = str(data.get("kind", ""))
+                    record = (
+                        self._record(sync_db, m.Transaction, self.edit_id, hid)
+                        if self.edit_id
+                        else None
+                    )
+                    if record is not None and record.deleted_at:
+                        raise ValueError("المعاملة محذوفة.")
+                    self._validate_transaction_category(record, category, kind)
+                    original_account = (
+                        self._record(
+                            sync_db,
+                            m.FinancialAccount,
+                            str(record.account_id),
+                            hid,
+                        )
+                        if record is not None
+                        else None
+                    )
+                    self._validate_transaction_account(
+                        record, account, original_account
+                    )
+                    day = date.fromisoformat(
+                        str(data.get("transaction_date", ""))
+                    )
+                    if day < account.opening_date or day > date.today():
+                        raise ValueError(
+                            "التاريخ يجب أن يكون بين افتتاح الحساب واليوم."
+                        )
+                    if record is None:
+                        record = m.Transaction(
+                            household_id=hid, created_by_user_id=user.id
+                        )
+                    record.account_id, record.category_id, record.kind = (
+                        account.id,
+                        category.id,
+                        kind,
+                    )
+                    record.amount = self._money(
+                        str(data.get("amount", "")), True
+                    )
+                    record.transaction_date = day
+                    record.description = str(
+                        data.get("description", "")
+                    ).strip()[:2000]
+                    sync_db.add(record)
+                    sync_db.flush()
+                    for other in sync_db.scalars(
+                        select(m.HouseholdMembership).where(
+                            m.HouseholdMembership.household_id == hid,
+                            m.HouseholdMembership.status == "active",
+                            m.HouseholdMembership.user_id != user.id,
+                        )
+                    ).all():
+                        self._notify(
+                            sync_db,
+                            hid,
+                            other.user_id,
+                            "partner_transaction",
+                            "حدّث شريكك دفتر المعاملات",
+                            transaction_id=record.id,
+                        )
+                    self._budget_alerts(sync_db, hid)
+                elif self.editor == "budget":
+                    category = self._record(
+                        sync_db,
+                        m.Category,
+                        str(data.get("category_id", "")),
+                        hid,
+                    )
+                    if category.kind != "expense" or category.is_archived:
+                        raise ValueError("الميزانية لفئات المصروف فقط.")
+                    month = date.fromisoformat(f"{data.get('month', '')}-01")
+                    threshold = int(data.get("threshold", 80))
+                    if (
+                        not 1900 <= month.year <= 9999
+                        or not 1 <= threshold <= 100
+                    ):
+                        raise ValueError("الشهر أو نسبة التنبيه غير صحيحة.")
+                    duplicate = sync_db.scalar(
+                        select(m.MonthlyCategoryBudget).where(
+                            m.MonthlyCategoryBudget.household_id == hid,
+                            m.MonthlyCategoryBudget.category_id == category.id,
+                            m.MonthlyCategoryBudget.year == month.year,
+                            m.MonthlyCategoryBudget.month == month.month,
+                        )
+                    )
+                    if duplicate and str(duplicate.id) != self.edit_id:
+                        raise ValueError(
+                            "توجد ميزانية لهذه الفئة في الشهر المحدد. عدّلها بدلًا من التكرار."
+                        )
+                    record = (
+                        self._record(
+                            sync_db, m.MonthlyCategoryBudget, self.edit_id, hid
+                        )
+                        if self.edit_id
+                        else m.MonthlyCategoryBudget(
+                            household_id=hid, created_by_user_id=user.id
+                        )
+                    )
+                    record.category_id, record.year, record.month = (
+                        category.id,
+                        month.year,
+                        month.month,
+                    )
+                    record.amount = self._money(
+                        str(data.get("amount", "")), True
+                    )
+                    record.alert_threshold_percent = threshold
+                    sync_db.add(record)
+                    sync_db.flush()
+                    self._budget_alerts(sync_db, hid)
+                    self.budget_month = month.strftime("%Y-%m")
+                else:
+                    raise ValueError("اختر العملية المطلوبة.")
+                sync_db.commit()
+                self._load(sync_db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(save_sync)
+            self.editor = ""
+            self.message = "تم الحفظ بنجاح."
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر الحفظ. راجع الحقول وحاول مجددًا."
+
+    def _budget_alerts(self, db, hid):
+        for b in db.scalars(
+            select(m.MonthlyCategoryBudget).where(
+                m.MonthlyCategoryBudget.household_id == hid
+            )
+        ).all():
+            start = date(b.year, b.month, 1)
+            end = (
+                (start.replace(day=28) + timedelta(days=4)).replace(day=1)
+                if b.year < 9999
+                else date.max
+            )
+            spent = db.scalar(
+                select(func.coalesce(func.sum(m.Transaction.amount), 0)).where(
+                    m.Transaction.household_id == hid,
+                    m.Transaction.category_id == b.category_id,
+                    m.Transaction.kind == "expense",
+                    m.Transaction.deleted_at.is_(None),
+                    m.Transaction.transaction_date >= start,
+                    m.Transaction.transaction_date < end,
+                )
+            )
+            kind = "budget_exceeded" if spent > b.amount else "budget_warning"
+            if (
+                spent <= 0
+                or spent < b.amount * Decimal(b.alert_threshold_percent) / 100
+            ):
+                continue
+            for member in db.scalars(
+                select(m.HouseholdMembership).where(
+                    m.HouseholdMembership.household_id == hid,
+                    m.HouseholdMembership.status == "active",
+                )
+            ).all():
+                exists = db.scalar(
+                    select(m.Notification.id).where(
+                        m.Notification.household_id == hid,
+                        m.Notification.recipient_user_id == member.user_id,
+                        m.Notification.budget_id == b.id,
+                        m.Notification.kind == kind,
+                    )
+                )
+                if not exists:
+                    category = db.get(m.Category, b.category_id)
+                    title = (
+                        f"تجاوزت ميزانية {category.name}"
+                        if kind == "budget_exceeded"
+                        else f"اقتربت من حد ميزانية {category.name}"
+                    )
+                    self._notify(
+                        db, hid, member.user_id, kind, title, budget_id=b.id
+                    )
+
+    @rx.event
+    def ask_delete(self, kind: str, record_id: str):
+        self.message = ""
+        self.delete_kind, self.delete_id = kind, record_id
+        account = (
+            next((a for a in self.accounts if a["id"] == record_id), {})
+            if kind == "account"
+            else {}
+        )
+        self.closing_name = account.get("name", "")
+        self.closing_balance = account.get("balance", "")
+
+    @rx.event
+    async def confirm_delete(self):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def delete_sync(sync_db):
+                user, member = auth._household(sync_db)
+                hid = member.household_id
+                sync_db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == hid)
+                    .with_for_update()
+                )
+                if self.delete_kind == "account":
+                    record = self._record(
+                        sync_db, m.FinancialAccount, self.delete_id, hid
+                    )
+                    if record.is_archived:
+                        raise ValueError("الحساب مغلق بالفعل.")
+                    record.is_archived = True
+                elif self.delete_kind == "transaction":
+                    self._record(
+                        sync_db, m.Transaction, self.delete_id, hid
+                    ).deleted_at = now()
+                elif self.delete_kind == "budget":
+                    record = self._record(
+                        sync_db, m.MonthlyCategoryBudget, self.delete_id, hid
+                    )
+                    for n in sync_db.scalars(
+                        select(m.Notification).where(
+                            m.Notification.household_id == hid,
+                            m.Notification.budget_id == record.id,
+                        )
+                    ).all():
+                        n.budget_id = None
+                    sync_db.flush()
+                    sync_db.delete(record)
+                else:
+                    raise ValueError("عملية غير صالحة.")
+                sync_db.commit()
+                self._load(sync_db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(delete_sync)
+            self.message = (
+                "تم إغلاق الحساب مع الاحتفاظ بمعاملاته"
+                if self.delete_kind == "account"
+                else "تم الحذف وتحديث الأرصدة."
+            )
+            self.delete_id = ""
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر الحذف."
+
+    @rx.event
+    async def invite(self, data: dict[str, Any]):
+        try:
+            email = str(data.get("email", "")).strip().lower()
+            if (
+                not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+                or len(email) > 320
+            ):
+                raise ValueError("أدخل بريد الشريك بصورة صحيحة.")
+            auth = await self.get_state(AuthState)
+
+            def invite_sync(sync_db) -> str:
+                user, member = auth._household(sync_db)
+                if member.role != "owner" or email == user.email:
+                    raise ValueError(
+                        "الدعوة متاحة للمالك فقط، ولا يمكنك دعوة نفسك."
+                    )
+                hid = member.household_id
+                sync_db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == hid)
+                    .with_for_update()
+                )
+                self._expire(sync_db, hid)
+                sync_db.flush()
+                if sync_db.scalar(
+                    select(m.PartnerInvitation.id).where(
+                        m.PartnerInvitation.household_id == hid,
+                        m.PartnerInvitation.email == email,
+                        m.PartnerInvitation.status == "pending",
+                    )
+                ):
+                    raise ValueError(
+                        "توجد دعوة معلقة لهذا البريد. ألغها لإنشاء رابط جديد."
+                    )
+                target = sync_db.scalar(
+                    select(m.User).where(m.User.email == email)
+                )
+                if target and sync_db.scalar(
+                    select(m.HouseholdMembership.id).where(
+                        m.HouseholdMembership.household_id == hid,
+                        m.HouseholdMembership.user_id == target.id,
+                        m.HouseholdMembership.status == "active",
+                    )
+                ):
+                    raise ValueError("هذا الحساب عضو بالفعل في الأسرة.")
+                raw = secrets.token_urlsafe(32)
+                sync_db.add(
+                    m.PartnerInvitation(
+                        household_id=hid,
+                        invited_by_user_id=user.id,
+                        email=email,
+                        token_hash=digest(raw),
+                        expires_at=now() + timedelta(days=7),
+                    )
+                )
+                sync_db.commit()
+                self._load(sync_db, user, member)
+                return f"/accept-invitation?token={raw}"
+
+            async with rx.asession() as db:
+                invite_link = await db.run_sync(invite_sync)
+            self.invite_link = invite_link
+            self.message = "دعوة قابلة للمشاركة صالحة 7 أيام. انسخ الرابط الآن؛ لم يُرسل بريد إلكتروني."
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر إنشاء الدعوة."
+
+    @rx.event
+    async def revoke(self, record_id: str):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def revoke_sync(sync_db):
+                user, member = auth._household(sync_db)
+                if member.role != "owner":
+                    raise ValueError("الإلغاء متاح لمالك الأسرة فقط.")
+                invite = self._record(
+                    sync_db, m.PartnerInvitation, record_id, member.household_id
+                )
+                if invite.status == "pending":
+                    invite.status = (
+                        "expired" if invite.expires_at <= now() else "revoked"
+                    )
+                    invite.resolved_at = now()
+                sync_db.commit()
+                self._load(sync_db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(revoke_sync)
+            self.invite_link = ""
+            self.message = "تم تحديث حالة الدعوة."
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر إلغاء الدعوة."
+
+    @rx.event
+    async def accept_invitation(self, data: dict[str, Any]):
+        try:
+            auth = await self.get_state(AuthState)
+            token = str(data.get("token", "")).strip() or auth.pending_invite
+            if "token=" in token:
+                token = token.split("token=", 1)[1].split("&", 1)[0]
+
+            def accept_sync(sync_db) -> str:
+                user = auth._identity(sync_db)
+                invitation = sync_db.scalar(
+                    select(m.PartnerInvitation)
+                    .where(m.PartnerInvitation.token_hash == digest(token))
+                    .with_for_update()
+                )
+                if not invitation or invitation.email != user.email:
+                    raise ValueError(
+                        "الدعوة غير صالحة أو البريد لا يطابق بريد حسابك المسجل."
+                    )
+                if invitation.status != "pending":
+                    raise ValueError(
+                        "هذه الدعوة مقبولة أو ملغاة أو منتهية الصلاحية."
+                    )
+                if invitation.expires_at <= now():
+                    invitation.status, invitation.resolved_at = "expired", now()
+                    sync_db.commit()
+                    raise ValueError("انتهت صلاحية الدعوة. اطلب رابطًا جديدًا.")
+                household = sync_db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == invitation.household_id)
+                    .with_for_update()
+                )
+                if (
+                    household.status != "active"
+                    or user.id == invitation.invited_by_user_id
+                ):
+                    raise ValueError("لا يمكن قبول هذه الدعوة.")
+                membership = sync_db.scalar(
+                    select(m.HouseholdMembership).where(
+                        m.HouseholdMembership.household_id == household.id,
+                        m.HouseholdMembership.user_id == user.id,
+                    )
+                )
+                if membership:
+                    membership.status, membership.ended_at = "active", None
+                else:
+                    sync_db.add(
+                        m.HouseholdMembership(
+                            household_id=household.id,
+                            user_id=user.id,
+                            role="partner",
+                        )
+                    )
+                sync_db.flush()
+                (
+                    invitation.status,
+                    invitation.resolved_at,
+                    invitation.accepted_by_user_id,
+                ) = "accepted", now(), user.id
+                self._notify(
+                    sync_db,
+                    household.id,
+                    invitation.invited_by_user_id,
+                    "invitation_accepted",
+                    "أصبح شريكك جزءًا من دفتر الأسرة",
+                    invitation_id=invitation.id,
+                )
+                sync_db.commit()
+                return str(household.id)
+
+            async with rx.asession() as db:
+                household_id = await db.run_sync(accept_sync)
+            auth.selected_household = household_id
+            auth.pending_invite = ""
+            self.message = "تم قبول الدعوة. أهلًا بك في الأسرة."
+            return rx.redirect("/dashboard")
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر قبول الدعوة."
+
+    @rx.event
+    async def mark_read(self, record_id: str):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def mark_read_sync(sync_db):
+                user, member = auth._household(sync_db)
+                query = select(m.Notification).where(
+                    m.Notification.household_id == member.household_id,
+                    m.Notification.recipient_user_id == user.id,
+                    m.Notification.read_at.is_(None),
+                )
+                if record_id:
+                    query = query.where(m.Notification.id == UUID(record_id))
+                for n in sync_db.scalars(query).all():
+                    n.read_at = now()
+                sync_db.commit()
+                self._load(sync_db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(mark_read_sync)
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر تحديث الإشعارات."
+
+    @rx.event
+    async def toggle_preference(self, kind: str):
+        try:
+            if kind not in (
+                "invitation_accepted",
+                "partner_transaction",
+                "budget_warning",
+                "budget_exceeded",
+            ):
+                raise ValueError("تفضيل غير صالح.")
+            auth = await self.get_state(AuthState)
+
+            def preference_sync(sync_db):
+                user, member = auth._household(sync_db)
+                sync_db.scalar(
+                    select(m.User).where(m.User.id == user.id).with_for_update()
+                )
+                p = sync_db.scalar(
+                    select(m.NotificationPreference).where(
+                        m.NotificationPreference.user_id == user.id,
+                        m.NotificationPreference.kind == kind,
+                        m.NotificationPreference.channel == "in_app",
+                    )
+                )
+                if p:
+                    p.enabled = not p.enabled
+                else:
+                    sync_db.add(
+                        m.NotificationPreference(
+                            user_id=user.id, kind=kind, enabled=False
+                        )
+                    )
+                sync_db.commit()
+                self._load(sync_db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(preference_sync)
+            self.message = "حُفظت تفضيلات الإشعارات داخل التطبيق."
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر حفظ التفضيلات."
