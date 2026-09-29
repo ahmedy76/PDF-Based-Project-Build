@@ -173,6 +173,7 @@ class ReportAggregationTests(unittest.TestCase):
                 [SimpleNamespace(id=hid, name="البيت")],
                 categories,
                 [account],
+                [],
                 transactions,
                 [budget],
                 [],
@@ -596,6 +597,156 @@ class ManagedDatabaseReportTests(unittest.TestCase):
         )
         self.assertNotIn("فئة الأسرة الأخرى", state.report_labels)
 
+    def _exercise_recurring(self, db: Session):
+        suffix = uuid4().hex
+        user = m.User(
+            display_name="تكرار",
+            email=f"repeat-{suffix}@example.test",
+            password_hash=bcrypt.hashpw(
+                secrets.token_bytes(24), bcrypt.gensalt()
+            ).decode(),
+        )
+        other_user = m.User(
+            display_name="أسرة ثانية",
+            email=f"repeat-other-{suffix}@example.test",
+            password_hash=bcrypt.hashpw(
+                secrets.token_bytes(24), bcrypt.gensalt()
+            ).decode(),
+        )
+        db.add_all([user, other_user])
+        db.flush()
+        household = self._seed_household(db, user, "دفتر التكرار")
+        other = self._seed_household(db, other_user, "دفتر آخر")
+        category = m.Category(
+            household_id=household.id, name="طعام", kind="expense"
+        )
+        account = m.FinancialAccount(
+            household_id=household.id,
+            created_by_user_id=user.id,
+            name="محفظة",
+            opening_date=date(2026, 3, 1),
+        )
+        db.add_all([category, account])
+        db.flush()
+        db.add(
+            m.MonthlyCategoryBudget(
+                household_id=household.id,
+                created_by_user_id=user.id,
+                category_id=category.id,
+                year=2026,
+                month=3,
+                amount=Decimal("15"),
+            )
+        )
+        rule = m.RecurringTransactionRule(
+            household_id=household.id,
+            created_by_user_id=user.id,
+            account_id=account.id,
+            category_id=category.id,
+            kind="expense",
+            amount=Decimal("10"),
+            description="طعام متكرر",
+            frequency="daily",
+            start_date=date(2026, 3, 14),
+            next_date=date(2026, 3, 14),
+        )
+        db.add(rule)
+        other_category = m.Category(
+            household_id=other.id, name="طعام آخر", kind="expense"
+        )
+        other_account = m.FinancialAccount(
+            household_id=other.id,
+            created_by_user_id=other_user.id,
+            name="محفظة ثانية",
+            opening_date=date(2026, 3, 1),
+        )
+        db.add_all([other_category, other_account])
+        db.flush()
+        other_rule = m.RecurringTransactionRule(
+            household_id=other.id,
+            created_by_user_id=other_user.id,
+            account_id=other_account.id,
+            category_id=other_category.id,
+            kind="expense",
+            amount=Decimal("999"),
+            frequency="daily",
+            start_date=date(2026, 3, 14),
+            next_date=date(2026, 3, 14),
+        )
+        db.add(other_rule)
+        db.flush()
+        state = LedgerState()
+        state.period = "current"
+        state.budget_month = "2026-03"
+        state.report_start, state.report_end = "", ""
+        with patch("app.states.ledger.date", FixedToday):
+            state._materialize_due(db, household.id, date(2026, 3, 15))
+            db.flush()
+            state._materialize_due(db, household.id, date(2026, 3, 15))
+            self.assertEqual(
+                db.query(m.Transaction)
+                .filter(m.Transaction.household_id == other.id)
+                .count(),
+                0,
+            )
+            with self.assertRaises(ValueError):
+                state._record(
+                    db,
+                    m.RecurringTransactionRule,
+                    str(other_rule.id),
+                    household.id,
+                )
+            state._load(
+                db,
+                user,
+                SimpleNamespace(household_id=household.id, role="owner"),
+            )
+        self.assertEqual(len(state.transactions), 2)
+        self.assertEqual(state.expense, "20.00")
+        self.assertEqual(
+            state.report_range_label, "من 2026-03-01 إلى 2026-03-15"
+        )
+        self.assertEqual(state.report_expense, "20.00")
+        self.assertEqual(state.budgets[0]["spent"], "20.00")
+        self.assertEqual(state.budgets[0]["status"], "تجاوز الحد")
+        self.assertEqual(state.recurring_rules[0]["next_date"], "2026-03-16")
+        self.assertTrue(
+            all(
+                t["recurring_rule_id"] == str(rule.id)
+                for t in state.transactions
+            )
+        )
+        db.query(m.Transaction).filter(
+            m.Transaction.recurring_rule_id == rule.id,
+            m.Transaction.scheduled_for == date(2026, 3, 14),
+        ).one().deleted_at = now()
+        rule.next_date = date(2026, 3, 14)
+        db.flush()
+        state._materialize_due(db, household.id, date(2026, 3, 15))
+        db.flush()
+        self.assertEqual(
+            db.query(m.Transaction)
+            .filter(m.Transaction.recurring_rule_id == rule.id)
+            .count(),
+            2,
+        )
+        rule.is_active = False
+        rule.next_date = date(2026, 3, 16)
+        db.flush()
+        state._materialize_due(db, household.id, date(2026, 3, 20))
+        self.assertEqual(
+            db.query(m.Transaction)
+            .filter(m.Transaction.recurring_rule_id == rule.id)
+            .count(),
+            2,
+        )
+        account.is_archived = True
+        rule.is_active = True
+        db.flush()
+        warning = state._materialize_due(db, household.id, date(2026, 3, 20))
+        self.assertFalse(rule.is_active)
+        self.assertIn("أُوقفت", warning)
+
     def test_custom_load_on_isolated_managed_dev_postgres(self):
         dev_url = os.getenv("REFLEX_DEV_DB_URL")
         if not dev_url:
@@ -611,6 +762,7 @@ class ManagedDatabaseReportTests(unittest.TestCase):
                         join_transaction_mode="create_savepoint",
                     ) as db:
                         self._exercise_load(db)
+                        self._exercise_recurring(db)
                 finally:
                     outer.rollback()
         except Exception as e:

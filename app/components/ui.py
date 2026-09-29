@@ -279,6 +279,13 @@ def transaction_row(row) -> rx.Component:
             ),
             rx.el.div(
                 rx.el.p(row["name"], class_name="font-semibold"),
+                rx.cond(
+                    row["recurring_rule_id"] != "",
+                    rx.el.span(
+                        f"متكررة · استحقاق {row['scheduled_for']}",
+                        class_name="inline-block w-fit rounded-lg bg-[#e9eddf] px-2 py-0.5 text-xs font-bold text-[#62704b]",
+                    ),
+                ),
                 rx.el.p(
                     f"{row['category']} · {row['account']} · {row['transaction_date']}",
                     class_name="mt-1 text-xs text-[#828679]",
@@ -361,6 +368,7 @@ def editor() -> rx.Component:
                             S.editor,
                             ("account", "بيانات الحساب المالي"),
                             ("transaction", "تفاصيل المعاملة"),
+                            ("recurring", "تفاصيل المعاملة المتكررة"),
                             "الميزانية الشهرية",
                         ),
                         class_name="text-xl font-bold",
@@ -492,6 +500,92 @@ def editor() -> rx.Component:
                                     "description",
                                     default=S.draft["description"],
                                     required=False,
+                                ),
+                                class_name="space-y-4",
+                            ),
+                        ),
+                        (
+                            "recurring",
+                            rx.el.div(
+                                select_field(
+                                    "نوع المعاملة",
+                                    "kind",
+                                    [
+                                        {"id": "expense", "name": "مصروف"},
+                                        {"id": "income", "name": "دخل"},
+                                    ],
+                                    S.draft["kind"],
+                                ),
+                                select_field(
+                                    "الحساب",
+                                    "account_id",
+                                    S.accounts,
+                                    S.draft["account_id"],
+                                ),
+                                rx.el.label(
+                                    rx.el.span(
+                                        "الفئة (اختر فئة تطابق نوع المعاملة)",
+                                        class_name="mb-2 block text-sm font-semibold text-[#465344]",
+                                    ),
+                                    rx.el.div(
+                                        rx.el.select(
+                                            rx.foreach(
+                                                S.categories,
+                                                lambda c: rx.el.option(
+                                                    f"{c['name']} — {rx.cond(c['kind'] == 'income', 'دخل', 'مصروف')}",
+                                                    value=c["id"],
+                                                ),
+                                            ),
+                                            name="category_id",
+                                            default_value=S.draft[
+                                                "category_id"
+                                            ],
+                                            class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a]",
+                                        ),
+                                        rx.icon(
+                                            "chevron-down",
+                                            class_name="pointer-events-none absolute left-3 top-4 h-4 w-4",
+                                        ),
+                                        class_name="relative",
+                                    ),
+                                ),
+                                field(
+                                    "المبلغ",
+                                    "amount",
+                                    default=S.draft["amount"],
+                                ),
+                                field(
+                                    "الوصف (اختياري)",
+                                    "description",
+                                    default=S.draft["description"],
+                                    required=False,
+                                ),
+                                select_field(
+                                    "التكرار",
+                                    "frequency",
+                                    [
+                                        {"id": "daily", "name": "يوميًا"},
+                                        {"id": "weekly", "name": "أسبوعيًا"},
+                                        {"id": "monthly", "name": "شهريًا"},
+                                    ],
+                                    S.draft["frequency"],
+                                ),
+                                field(
+                                    "تاريخ البداية",
+                                    "start_date",
+                                    "date",
+                                    S.draft["start_date"],
+                                ),
+                                field(
+                                    "تاريخ النهاية (اختياري)",
+                                    "end_date",
+                                    "date",
+                                    S.draft["end_date"],
+                                    required=False,
+                                ),
+                                rx.el.p(
+                                    "تعديل القاعدة يغيّر المواعيد القادمة فقط؛ لا يغيّر المعاملات المسجلة سابقًا.",
+                                    class_name="text-xs leading-6 text-[#7c8178]",
                                 ),
                                 class_name="space-y-4",
                             ),

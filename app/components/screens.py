@@ -529,6 +529,62 @@ def accounts() -> rx.Component:
     )
 
 
+def recurring_card(row) -> rx.Component:
+    return rx.el.article(
+        rx.el.div(
+            rx.el.div(
+                rx.el.h3(
+                    row["name"], class_name="text-lg font-bold text-[#27394a]"
+                ),
+                rx.el.p(
+                    f"{row['category']} · {row['account']}",
+                    class_name="mt-1 text-sm text-[#7c8178]",
+                ),
+            ),
+            rx.el.span(
+                row["status"],
+                class_name=rx.cond(
+                    row["active"] == "yes",
+                    "w-fit rounded-lg bg-[#e9eddf] px-3 py-1 text-xs font-bold text-[#62704b]",
+                    "w-fit rounded-lg bg-[#f1e7dd] px-3 py-1 text-xs font-bold text-[#a26550]",
+                ),
+            ),
+            class_name="flex items-start justify-between gap-3",
+        ),
+        rx.el.p(
+            f"{row['display_amount']} {S.currency} · {row['frequency_label']}",
+            class_name="mt-4 font-bold tabular-nums text-[#27394a]",
+        ),
+        rx.el.p(
+            f"الاستحقاق القادم: {row['next_date']}",
+            class_name="mt-1 text-sm text-[#7c8178]",
+        ),
+        rx.cond(
+            row["end_date"] != "",
+            rx.el.p(
+                f"حتى {row['end_date']}",
+                class_name="mt-1 text-xs text-[#7c8178]",
+            ),
+        ),
+        rx.el.div(
+            rx.el.button(
+                rx.icon("pencil", class_name="h-4 w-4"),
+                "تعديل",
+                on_click=lambda: S.open_editor("recurring", row["id"]),
+                class_name=SECONDARY,
+            ),
+            rx.el.button(
+                rx.cond(row["active"] == "yes", "إيقاف مؤقت", "استئناف"),
+                on_click=lambda: S.toggle_recurring(row["id"]),
+                class_name=SECONDARY,
+            ),
+            class_name="mt-5 flex flex-wrap gap-2 border-t border-[#eeebe2] pt-4",
+        ),
+        class_name=CARD,
+        key=row["id"],
+    )
+
+
 def transactions() -> rx.Component:
     return shell(
         rx.el.div(
@@ -622,6 +678,38 @@ def transactions() -> rx.Component:
                     empty("لا توجد معاملات تطابق هذه الفترة أو الفلاتر."),
                 ),
                 class_name=CARD,
+            ),
+            rx.el.section(
+                rx.el.div(
+                    rx.el.div(
+                        rx.el.h2(
+                            "المعاملات المتكررة",
+                            class_name="text-xl font-bold text-[#27394a]",
+                        ),
+                        rx.el.p(
+                            "تُسجّل المستحقات عند فتح الدفتر، لا في الخلفية",
+                            class_name="mt-1 text-sm text-[#7c8178]",
+                        ),
+                    ),
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        "معاملة متكررة جديدة",
+                        on_click=lambda: S.open_editor("recurring"),
+                        class_name=BUTTON,
+                    ),
+                    class_name="mb-5 flex flex-wrap items-center justify-between gap-4",
+                ),
+                rx.cond(
+                    S.recurring_rules.length() > 0,
+                    rx.el.div(
+                        rx.foreach(S.recurring_rules, recurring_card),
+                        class_name="grid gap-4 md:grid-cols-2 xl:grid-cols-3",
+                    ),
+                    empty(
+                        "لا توجد معاملات متكررة بعد. أضف قاعدة لجدولة دخلك أو مصروفك."
+                    ),
+                ),
+                class_name="mt-8",
             ),
         )
     )

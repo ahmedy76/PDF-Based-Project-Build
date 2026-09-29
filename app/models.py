@@ -342,6 +342,95 @@ class Category(Record, Base):
     household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
 
 
+class RecurringTransactionRule(Record, Base):
+    __tablename__ = "mh_recurring_transaction_rules"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "id", name="uq_mh_recurring_rule_tenant_id"
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "category_id", "kind"],
+            [
+                "mh_categories.household_id",
+                "mh_categories.id",
+                "mh_categories.kind",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("kind IN ('income', 'expense')", name="kind"),
+        CheckConstraint(
+            "amount > 0 AND amount <> 'NaN'::numeric", name="positive_amount"
+        ),
+        CheckConstraint(
+            "frequency IN ('daily', 'weekly', 'monthly')", name="frequency"
+        ),
+        CheckConstraint(
+            "next_date >= start_date", name="next_date_after_start"
+        ),
+        CheckConstraint(
+            "end_date IS NULL OR end_date >= start_date",
+            name="end_date_after_start",
+        ),
+        Index(
+            "ix_mh_recurring_rules_tenant_active_next",
+            "household_id",
+            "is_active",
+            "next_date",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    account_id: Mapped[UUID] = mapped_column(Uuid, default=None, nullable=False)
+    category_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    kind: Mapped[str] = mapped_column(
+        String(10), default="expense", server_default="expense"
+    )
+    amount: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), default=Decimal("0"), server_default="0"
+    )
+    description: Mapped[str] = mapped_column(
+        Text, default="", server_default=""
+    )
+    frequency: Mapped[str] = mapped_column(
+        String(10), default="monthly", server_default="monthly"
+    )
+    start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    next_date: Mapped[date] = mapped_column(Date, nullable=False)
+    end_date: Mapped[date | None] = mapped_column(Date, default=None)
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    account: Mapped["FinancialAccount"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    category: Mapped["Category"] = relationship(viewonly=True, lazy="raise")
+
+
 class Transaction(Record, Base):
     __tablename__ = "mh_transactions"
     __table_args__ = (
@@ -369,6 +458,25 @@ class Transaction(Record, Base):
                 "mh_household_memberships.user_id",
             ],
             ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "recurring_rule_id"],
+            [
+                "mh_recurring_transaction_rules.household_id",
+                "mh_recurring_transaction_rules.id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "household_id",
+            "recurring_rule_id",
+            "scheduled_for",
+            name="uq_mh_transaction_recurring_occurrence",
+        ),
+        CheckConstraint(
+            "(recurring_rule_id IS NULL AND scheduled_for IS NULL) OR "
+            "(recurring_rule_id IS NOT NULL AND scheduled_for IS NOT NULL)",
+            name="recurring_fields_together",
         ),
         CheckConstraint("kind IN ('income', 'expense')", name="kind"),
         CheckConstraint(
@@ -421,6 +529,8 @@ class Transaction(Record, Base):
     description: Mapped[str] = mapped_column(
         Text, default="", server_default=""
     )
+    recurring_rule_id: Mapped[UUID | None] = mapped_column(Uuid, default=None)
+    scheduled_for: Mapped[date | None] = mapped_column(Date, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), default=None
     )
@@ -430,6 +540,9 @@ class Transaction(Record, Base):
     )
     category: Mapped["Category"] = relationship(viewonly=True, lazy="raise")
     creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    recurring_rule: Mapped["RecurringTransactionRule | None"] = relationship(
         viewonly=True, lazy="raise"
     )
 

@@ -8,7 +8,7 @@ from uuid import uuid4
 from decimal import Decimal
 from app import models
 from app.states.auth import digest
-from app.states.ledger import LedgerState
+from app.states.ledger import LedgerState, next_recurring_date
 from app.states.categories import CategoryState
 
 
@@ -130,6 +130,7 @@ class MoneyRulesTests(unittest.TestCase):
             [SimpleNamespace(id=hid, name="البيت")],
             [category, archived_category],
             [active, closed],
+            [],
             txs,
             [],
             [],
@@ -169,7 +170,7 @@ class MoneyRulesTests(unittest.TestCase):
         state.filter_category = ""
         self.assertEqual(state.report_expense, "30.00")
         self.assertIn(
-            "deleted_at IS NULL", str(db.scalars.call_args_list[3].args[0])
+            "deleted_at IS NULL", str(db.scalars.call_args_list[4].args[0])
         )
         state.filter_account = str(closed_id)
         self.assertEqual(
@@ -292,6 +293,36 @@ class MoneyRulesTests(unittest.TestCase):
         LedgerState._validate_transaction_account(None, None, active, None)
 
 
+class RecurringScheduleTests(unittest.TestCase):
+    def test_month_end_and_leap(self):
+        start = date(2024, 1, 31)
+        feb = next_recurring_date(start, start, "monthly")
+        self.assertEqual(feb, date(2024, 2, 29))
+        self.assertEqual(
+            next_recurring_date(feb, start, "monthly"), date(2024, 3, 31)
+        )
+        start = date(2023, 1, 31)
+        self.assertEqual(
+            next_recurring_date(start, start, "monthly"), date(2023, 2, 28)
+        )
+        self.assertEqual(
+            next_recurring_date(date(2023, 2, 28), start, "monthly"),
+            date(2023, 3, 31),
+        )
+
+    def test_daily_weekly_and_max(self):
+        self.assertEqual(
+            next_recurring_date(date(2026, 1, 1), date(2026, 1, 1), "daily"),
+            date(2026, 1, 2),
+        )
+        self.assertEqual(
+            next_recurring_date(date(2026, 1, 1), date(2026, 1, 1), "weekly"),
+            date(2026, 1, 8),
+        )
+        self.assertIsNone(next_recurring_date(date.max, date.max, "daily"))
+        self.assertIsNone(next_recurring_date(date.max, date.max, "monthly"))
+
+
 class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
     class January2026(date):
         @classmethod
@@ -344,6 +375,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
                 [SimpleNamespace(id=hid, name="البيت")],
                 [category],
                 [account],
+                [],
                 [
                     transaction(date(2025, 12, 5), "45.00"),
                     transaction(date(2025, 12, 28), "40.00"),
@@ -391,11 +423,11 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.dashboard_budgets[0]["progress"], "100")
         self.assertEqual(state.dashboard_budgets[0]["status"], "تجاوز الحد")
         self.assertEqual(state.dashboard_budgets[0]["month"], "2026-01")
-        query = db.scalars.call_args_list[4].args[0]
+        query = db.scalars.call_args_list[5].args[0]
         compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
         self.assertIn("2025", compiled)
         self.assertIn("2026", compiled)
-        self.assertEqual(db.scalars.call_count, 9)
+        self.assertEqual(db.scalars.call_count, 10)
 
     def test_previous_month_does_not_fill_empty_current_month(self):
         state = LedgerState()
@@ -414,7 +446,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.budget_month, "2026-01")
         self.assertEqual([b["id"] for b in state.budgets], [str(january.id)])
         self.assertEqual(state.budgets, state.dashboard_budgets)
-        self.assertEqual(db.scalars.call_count, 9)
+        self.assertEqual(db.scalars.call_count, 10)
         event = LedgerState.change_month.fn(state, {"month": "2025-12"})
         self.assertIsNotNone(await anext(event))
         with self.assertRaises(StopAsyncIteration):

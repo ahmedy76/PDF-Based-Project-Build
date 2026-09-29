@@ -1,6 +1,7 @@
 import reflex as rx
 
 import logging
+import calendar
 import re
 import secrets
 from contextlib import suppress
@@ -13,6 +14,29 @@ import reflex_xy
 from sqlalchemy import select, func, tuple_
 from app import models as m
 from app.states.auth import AuthState, digest, now
+
+
+def next_recurring_date(
+    current: date, start: date, frequency: str
+) -> date | None:
+    if frequency in ("daily", "weekly"):
+        step = 1 if frequency == "daily" else 7
+        return (
+            current + timedelta(days=step)
+            if (date.max - current).days >= step
+            else None
+        )
+    if frequency == "monthly":
+        year, month = (
+            current.year + (current.month == 12),
+            current.month % 12 + 1,
+        )
+        if year > 9999:
+            return None
+        return date(
+            year, month, min(start.day, calendar.monthrange(year, month)[1])
+        )
+    raise ValueError("تكرار غير صالح.")
 
 
 class LedgerState(rx.State):
@@ -31,6 +55,7 @@ class LedgerState(rx.State):
     categories: list[dict[str, str]] = []
     archived_categories: list[dict[str, str]] = []
     transactions: list[dict[str, str]] = []
+    recurring_rules: list[dict[str, str]] = []
     budgets: list[dict[str, str]] = []
     dashboard_budgets: list[dict[str, str]] = []
     invitations: list[dict[str, str]] = []
@@ -72,6 +97,9 @@ class LedgerState(rx.State):
         "amount": "",
         "transaction_date": "",
         "description": "",
+        "frequency": "monthly",
+        "start_date": "",
+        "end_date": "",
         "month": "",
         "threshold": "80",
     }
@@ -341,6 +369,107 @@ class LedgerState(rx.State):
             "threshold": str(budget.alert_threshold_percent),
         }
 
+    def _materialize_due(self, db, household_id, today: date) -> str:
+        db.scalar(
+            select(m.Household)
+            .where(m.Household.id == household_id)
+            .with_for_update()
+        )
+        rules = db.scalars(
+            select(m.RecurringTransactionRule)
+            .where(
+                m.RecurringTransactionRule.household_id == household_id,
+                m.RecurringTransactionRule.is_active.is_(True),
+                m.RecurringTransactionRule.next_date <= today,
+            )
+            .order_by(m.RecurringTransactionRule.next_date)
+            .with_for_update()
+        ).all()
+        accounts = {
+            a.id: a
+            for a in db.scalars(
+                select(m.FinancialAccount).where(
+                    m.FinancialAccount.household_id == household_id
+                )
+            ).all()
+        }
+        categories = {
+            c.id: c
+            for c in db.scalars(
+                select(m.Category).where(
+                    m.Category.household_id == household_id
+                )
+            ).all()
+        }
+        posted = 0
+        processed = 0
+        paused = 0
+        for rule in rules:
+            account, category = (
+                accounts.get(rule.account_id),
+                categories.get(rule.category_id),
+            )
+            if (
+                account is None
+                or account.is_archived
+                or category is None
+                or category.is_archived
+                or category.kind != rule.kind
+                or rule.next_date < account.opening_date
+            ):
+                rule.is_active = False
+                paused += 1
+                continue
+            while rule.next_date <= today and (
+                rule.end_date is None or rule.next_date <= rule.end_date
+            ):
+                if processed >= 500:
+                    raise ValueError(
+                        "تراكمت أكثر من 500 استحقاق متكرر. لم يُسجّل أي منها؛ تواصل مع الدعم لمعالجة التراكم دون فقدان المواعيد."
+                    )
+                processed += 1
+                scheduled = rule.next_date
+                exists = db.scalar(
+                    select(m.Transaction.id).where(
+                        m.Transaction.household_id == household_id,
+                        m.Transaction.recurring_rule_id == rule.id,
+                        m.Transaction.scheduled_for == scheduled,
+                    )
+                )
+                if not exists:
+                    db.add(
+                        m.Transaction(
+                            household_id=household_id,
+                            created_by_user_id=rule.created_by_user_id,
+                            account_id=rule.account_id,
+                            category_id=rule.category_id,
+                            kind=rule.kind,
+                            amount=rule.amount,
+                            description=rule.description,
+                            transaction_date=scheduled,
+                            recurring_rule_id=rule.id,
+                            scheduled_for=scheduled,
+                        )
+                    )
+                    posted += 1
+                following = next_recurring_date(
+                    scheduled, rule.start_date, rule.frequency
+                )
+                if following is None:
+                    rule.is_active = False
+                    break
+                rule.next_date = following
+            if rule.end_date is not None and rule.next_date > rule.end_date:
+                rule.is_active = False
+        if posted:
+            db.flush()
+            self._budget_alerts(db, household_id)
+        return (
+            f"أُوقفت {paused} قاعدة متكررة لأن الحساب أو الفئة لم يعد صالحًا. عدّلها ثم استأنفها."
+            if paused
+            else ""
+        )
+
     def _load(self, db, user, member):
         hid = member.household_id
         household = db.get(m.Household, hid)
@@ -383,6 +512,47 @@ class LedgerState(rx.State):
             .order_by(m.FinancialAccount.created_at)
         ).all()
         account_names = {a.id: a.name for a in accounts}
+        self.recurring_rules = [
+            {
+                "id": str(r.id),
+                "account_id": str(r.account_id),
+                "category_id": str(r.category_id),
+                "kind": r.kind,
+                "amount": str(r.amount),
+                "display_amount": f"{r.amount:,.2f}",
+                "description": r.description,
+                "name": r.description
+                or category_names.get(r.category_id, "معاملة متكررة"),
+                "account": account_names.get(r.account_id, "حساب سابق"),
+                "category": category_names.get(r.category_id, "فئة سابقة"),
+                "frequency": r.frequency,
+                "frequency_label": {
+                    "daily": "يوميًا",
+                    "weekly": "أسبوعيًا",
+                    "monthly": "شهريًا",
+                }.get(r.frequency, ""),
+                "start_date": r.start_date.isoformat(),
+                "end_date": r.end_date.isoformat() if r.end_date else "",
+                "next_date": r.next_date.isoformat(),
+                "status": "نشطة"
+                if r.is_active
+                else (
+                    "متوقفة · الحساب مغلق"
+                    if r.account_id
+                    not in {a.id for a in accounts if not a.is_archived}
+                    else "متوقفة · الفئة مؤرشفة"
+                    if r.category_id
+                    not in {c.id for c in categories if not c.is_archived}
+                    else "متوقفة"
+                ),
+                "active": "yes" if r.is_active else "no",
+            }
+            for r in db.scalars(
+                select(m.RecurringTransactionRule)
+                .where(m.RecurringTransactionRule.household_id == hid)
+                .order_by(m.RecurringTransactionRule.created_at.desc())
+            ).all()
+        ]
         txs = db.scalars(
             select(m.Transaction)
             .where(
@@ -437,6 +607,12 @@ class LedgerState(rx.State):
                 "category_id": str(t.category_id),
                 "category": category_names.get(t.category_id, ""),
                 "transaction_date": t.transaction_date.isoformat(),
+                "recurring_rule_id": str(
+                    getattr(t, "recurring_rule_id", None) or ""
+                ),
+                "scheduled_for": getattr(t, "scheduled_for", None).isoformat()
+                if getattr(t, "scheduled_for", None)
+                else "",
             }
             for t in txs
         ]
@@ -617,7 +793,11 @@ class LedgerState(rx.State):
                     nonlocal success
                     with suppress(PermissionError):
                         user, member = auth._household(sync_db)
+                        warning = self._materialize_due(
+                            sync_db, member.household_id, date.today()
+                        )
                         self._load(sync_db, user, member)
+                        self.message = warning
                         success = True
 
                 await db.run_sync(load_sync)
@@ -705,12 +885,16 @@ class LedgerState(rx.State):
             "amount": "",
             "transaction_date": today,
             "description": "",
+            "frequency": "monthly",
+            "start_date": today,
+            "end_date": "",
             "month": self.budget_month or today[:7],
             "threshold": "80",
         }
         rows = {
             "account": self.accounts,
             "transaction": self.transactions,
+            "recurring": self.recurring_rules,
             "budget": self.budgets + self.dashboard_budgets,
         }.get(kind, [])
         record = next((x for x in rows if x["id"] == record_id), {})
@@ -872,6 +1056,77 @@ class LedgerState(rx.State):
                             transaction_id=record.id,
                         )
                     self._budget_alerts(sync_db, hid)
+                elif self.editor == "recurring":
+                    account = self._record(
+                        sync_db,
+                        m.FinancialAccount,
+                        str(data.get("account_id", "")),
+                        hid,
+                    )
+                    category = self._record(
+                        sync_db,
+                        m.Category,
+                        str(data.get("category_id", "")),
+                        hid,
+                    )
+                    kind = str(data.get("kind", ""))
+                    self._validate_transaction_account(None, account, None)
+                    self._validate_transaction_category(None, category, kind)
+                    frequency = str(data.get("frequency", ""))
+                    if frequency not in ("daily", "weekly", "monthly"):
+                        raise ValueError("اختر تكرارًا صالحًا.")
+                    start_value = str(data.get("start_date", ""))
+                    end_value = str(data.get("end_date", "")).strip()
+                    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", start_value) or (
+                        end_value
+                        and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", end_value)
+                    ):
+                        raise ValueError("أدخل التاريخ بصيغة YYYY-MM-DD.")
+                    start = date.fromisoformat(start_value)
+                    end = date.fromisoformat(end_value) if end_value else None
+                    if start < date.today() or start < account.opening_date:
+                        raise ValueError(
+                            "بداية التكرار يجب أن تكون اليوم أو بعده، وبعد افتتاح الحساب."
+                        )
+                    if end and end < start:
+                        raise ValueError(
+                            "نهاية التكرار يجب أن تكون بعد البداية أو مساوية لها."
+                        )
+                    description = str(data.get("description", "")).strip()
+                    if len(description) > 2000:
+                        raise ValueError("الوصف لا يمكن أن يتجاوز 2000 حرف.")
+                    record = (
+                        self._record(
+                            sync_db,
+                            m.RecurringTransactionRule,
+                            self.edit_id,
+                            hid,
+                        )
+                        if self.edit_id
+                        else m.RecurringTransactionRule(
+                            household_id=hid, created_by_user_id=user.id
+                        )
+                    )
+                    record.account_id, record.category_id, record.kind = (
+                        account.id,
+                        category.id,
+                        kind,
+                    )
+                    record.amount = self._money(
+                        str(data.get("amount", "")), True
+                    )
+                    record.description, record.frequency = (
+                        description,
+                        frequency,
+                    )
+                    record.start_date, record.next_date, record.end_date = (
+                        start,
+                        start,
+                        end,
+                    )
+                    sync_db.add(record)
+                    sync_db.flush()
+                    self._materialize_due(sync_db, hid, date.today())
                 elif self.editor == "budget":
                     category = self._record(
                         sync_db,
@@ -940,6 +1195,65 @@ class LedgerState(rx.State):
         except Exception as e:
             logging.exception(f"Error: {e}")
             self.message = "تعذر الحفظ. راجع الحقول وحاول مجددًا."
+
+    @rx.event
+    async def toggle_recurring(self, record_id: str):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def toggle_sync(db):
+                user, member = auth._household(db)
+                hid = member.household_id
+                db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == hid)
+                    .with_for_update()
+                )
+                rule = self._record(
+                    db, m.RecurringTransactionRule, record_id, hid
+                )
+                if rule.is_active:
+                    rule.is_active = False
+                    message = "أُوقف التكرار؛ لن تُنشأ معاملات جديدة حتى تستأنفه."
+                else:
+                    account = self._record(
+                        db, m.FinancialAccount, str(rule.account_id), hid
+                    )
+                    category = self._record(
+                        db, m.Category, str(rule.category_id), hid
+                    )
+                    self._validate_transaction_account(None, account, None)
+                    self._validate_transaction_category(
+                        None, category, rule.kind
+                    )
+                    if rule.next_date < account.opening_date:
+                        raise ValueError(
+                            "تاريخ الاستحقاق أقدم من افتتاح الحساب؛ عدّل القاعدة أولًا."
+                        )
+                    if rule.end_date and rule.next_date > rule.end_date:
+                        raise ValueError(
+                            "انتهت فترة التكرار؛ عدّل تاريخ النهاية أولًا."
+                        )
+                    rule.is_active = True
+                    message = (
+                        self._materialize_due(db, hid, date.today())
+                        or "استؤنف التكرار؛ سُجّلت الاستحقاقات السابقة عند فتح الدفتر."
+                    )
+                db.commit()
+                self._load(db, user, member)
+                return message
+
+            async with rx.asession() as db:
+                self.message = await db.run_sync(toggle_sync)
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.message = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر تحديث التكرار."
 
     def _budget_alerts(self, db, hid):
         for b in db.scalars(
