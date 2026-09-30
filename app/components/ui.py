@@ -14,6 +14,7 @@ NAV = [
     {"label": "المعاملات", "path": "/transactions", "icon": "arrow-left-right"},
     {"label": "الميزانيات", "path": "/budgets", "icon": "chart-pie"},
     {"label": "الأهداف", "path": "/goals", "icon": "target"},
+    {"label": "الديون", "path": "/debts", "icon": "hand-coins"},
     {"label": "التقارير", "path": "/reports", "icon": "chart-no-axes-combined"},
 ]
 
@@ -119,7 +120,7 @@ def nav_item(item: dict[str, str]) -> rx.Component:
         rx.icon(item["icon"], class_name="h-5 w-5"),
         rx.el.span(item["label"]),
         href=item["path"],
-        class_name="flex min-w-[70px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-xs font-semibold text-[#52604f] hover:bg-[#e9ecdf] md:flex-row md:gap-2 md:text-sm",
+        class_name="flex min-w-[70px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-xs font-semibold text-[#52604f] hover:bg-[#e9ecdf] lg:min-w-0 lg:flex-row lg:gap-1 lg:px-1.5 xl:gap-2 xl:px-2 xl:text-sm",
     )
 
 

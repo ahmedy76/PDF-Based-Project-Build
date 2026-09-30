@@ -5,6 +5,7 @@ from app.states.auth import AuthState
 from app.states.categories import CategoryState as C
 from app.states.ledger import LedgerState as S
 from app.states.goals import GoalRow, GoalState as G
+from app.states.debts import DebtRow, InstallmentRow, PaymentRow, DebtState as D
 from app.components.ui import (
     BUTTON,
     SECONDARY,
@@ -1064,6 +1065,507 @@ def goals() -> rx.Component:
                 ),
             ),
             goal_dialog(),
+        )
+    )
+
+
+def debt_installment(item: InstallmentRow) -> rx.Component:
+    return rx.el.li(
+        rx.el.div(
+            rx.el.span(
+                f"قسط {item['sequence']} · {item['due']}",
+                class_name="font-semibold text-[#27394a]",
+            ),
+            rx.el.span(
+                item["status"],
+                class_name=rx.cond(
+                    item["status"] == "متأخر",
+                    "w-fit rounded-full bg-[#f1e7dd] px-2 py-1 text-xs font-bold text-[#a26550]",
+                    rx.cond(
+                        item["status"] == "مدفوع",
+                        "w-fit rounded-full bg-[#e9eddf] px-2 py-1 text-xs font-bold text-[#62704b]",
+                        "w-fit rounded-full bg-[#f4eddb] px-2 py-1 text-xs font-bold text-[#b48861]",
+                    ),
+                ),
+            ),
+            class_name="flex flex-wrap items-center justify-between gap-2",
+        ),
+        rx.el.p(
+            f"القسط {item['amount']} · المدفوع {item['paid']} · المتبقي {item['remaining']} {S.currency}",
+            class_name="mt-2 text-sm tabular-nums text-[#7c8178]",
+        ),
+        class_name="border-b border-[#eeebe2] py-3 last:border-0",
+    )
+
+
+def debt_payment(
+    item: PaymentRow, debt_id: str, archived: bool
+) -> rx.Component:
+    return rx.el.li(
+        rx.el.div(
+            rx.el.span(
+                f"{item['date']} · {item['amount']} {S.currency}",
+                class_name="font-semibold tabular-nums",
+            ),
+            rx.cond(
+                item["voided"],
+                rx.el.span(
+                    "ملغاة",
+                    class_name="w-fit rounded-full bg-[#f1e7dd] px-2 py-1 text-xs text-[#a26550]",
+                ),
+                rx.cond(
+                    archived,
+                    rx.el.span("مسجلة", class_name="text-xs text-[#62704b]"),
+                    rx.el.button(
+                        "إلغاء الدفعة",
+                        on_click=lambda: D.ask_void(debt_id, item["id"]),
+                        class_name="text-xs font-bold text-[#a26550] hover:underline",
+                    ),
+                ),
+            ),
+            class_name="flex flex-wrap items-center justify-between gap-2",
+        ),
+        rx.cond(
+            item["note"] != "",
+            rx.el.p(
+                item["note"],
+                class_name="mt-1 break-words text-sm text-[#7c8178]",
+            ),
+        ),
+        class_name="border-b border-[#eeebe2] py-3 last:border-0",
+    )
+
+
+def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
+    return rx.el.article(
+        rx.el.div(
+            rx.el.div(
+                rx.icon("hand-coins", class_name="h-6 w-6 text-[#62704b]"),
+                rx.el.h3(
+                    row["title"],
+                    class_name="break-words text-xl font-bold text-[#27394a]",
+                ),
+                class_name="flex min-w-0 items-center gap-3",
+            ),
+            rx.el.div(
+                rx.el.span(
+                    rx.cond(row["direction"] == "payable", "علينا", "لنا"),
+                    class_name="w-fit rounded-full bg-[#e9eddf] px-3 py-1 text-xs font-bold text-[#62704b]",
+                ),
+                rx.el.span(
+                    row["status"],
+                    class_name=rx.cond(
+                        row["status"] == "متأخر",
+                        "w-fit rounded-full bg-[#f1e7dd] px-3 py-1 text-xs font-bold text-[#a26550]",
+                        rx.cond(
+                            row["status"] == "مدفوع",
+                            "w-fit rounded-full bg-[#e9eddf] px-3 py-1 text-xs font-bold text-[#62704b]",
+                            "w-fit rounded-full bg-[#f4eddb] px-3 py-1 text-xs font-bold text-[#9a7945]",
+                        ),
+                    ),
+                ),
+                class_name="flex flex-wrap gap-2",
+            ),
+            class_name="flex flex-wrap items-start justify-between gap-3",
+        ),
+        rx.el.p(
+            f"الطرف الآخر: {row['counterparty']}",
+            class_name="mt-4 break-words text-sm text-[#7c8178]",
+        ),
+        rx.cond(
+            row["note"] != "",
+            rx.el.p(
+                row["note"],
+                class_name="mt-2 break-words text-sm text-[#7c8178]",
+            ),
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.span("أصل الدين", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    row["principal"], class_name="block font-bold tabular-nums"
+                ),
+            ),
+            rx.el.div(
+                rx.el.span("المدفوع", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    row["paid"],
+                    class_name="block font-bold tabular-nums text-[#62704b]",
+                ),
+            ),
+            rx.el.div(
+                rx.el.span("المتبقي", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    row["remaining"], class_name="block font-bold tabular-nums"
+                ),
+            ),
+            class_name="my-5 grid grid-cols-3 gap-3 rounded-xl bg-[#f6f4ec] p-4 text-sm",
+        ),
+        rx.el.p(
+            f"المتأخر: {row['overdue']} {S.currency}",
+            class_name="text-sm font-semibold tabular-nums text-[#a26550]",
+        ),
+        rx.cond(
+            row["next_due"] != "",
+            rx.el.p(
+                f"أول قسط غير مسدد: {row['next_due']}",
+                class_name="mt-1 text-sm text-[#b48861]",
+            ),
+        ),
+        rx.el.details(
+            rx.el.summary(
+                f"جدول الأقساط ({row['installments'].length()})",
+                class_name="cursor-pointer text-sm font-bold text-[#62704b]",
+            ),
+            rx.el.ol(
+                rx.foreach(row["installments"], debt_installment),
+                class_name="mt-2",
+            ),
+            class_name="mt-5 border-t border-[#eeebe2] pt-4",
+        ),
+        rx.el.details(
+            rx.el.summary(
+                f"سجل الدفعات ({row['history'].length()})",
+                class_name="cursor-pointer text-sm font-bold text-[#62704b]",
+            ),
+            rx.cond(
+                row["history"].length() > 0,
+                rx.el.ul(
+                    rx.foreach(
+                        row["history"],
+                        lambda item: debt_payment(item, row["id"], archived),
+                    ),
+                    class_name="mt-2",
+                ),
+                rx.el.p(
+                    "لا دفعات مسجلة.", class_name="mt-3 text-sm text-[#7c8178]"
+                ),
+            ),
+            class_name="mt-4 border-t border-[#eeebe2] pt-4",
+        ),
+        rx.el.div(
+            rx.cond(
+                archived,
+                rx.el.button(
+                    rx.icon("archive-restore", class_name="h-4 w-4"),
+                    "استعادة",
+                    on_click=lambda: D.set_archived(row["id"], False),
+                    class_name=SECONDARY,
+                ),
+                rx.el.div(
+                    rx.cond(
+                        row["remaining"] != "0.0000",
+                        rx.el.button(
+                            "تسجيل دفعة",
+                            on_click=lambda: D.open_payment(row["id"]),
+                            class_name=BUTTON,
+                        ),
+                    ),
+                    rx.el.button(
+                        "تعديل",
+                        on_click=lambda: D.open_debt(row["id"]),
+                        class_name=SECONDARY,
+                    ),
+                    rx.el.button(
+                        "أرشفة",
+                        on_click=lambda: D.set_archived(row["id"], True),
+                        class_name=SECONDARY,
+                    ),
+                    class_name="flex flex-wrap gap-2",
+                ),
+            ),
+            class_name="mt-5 border-t border-[#eeebe2] pt-4",
+        ),
+        class_name=CARD,
+        key=row["id"],
+    )
+
+
+def debt_dialog() -> rx.Component:
+    return rx.cond(
+        D.editor != "",
+        rx.el.div(
+            rx.el.section(
+                rx.el.div(
+                    rx.el.h2(
+                        rx.match(
+                            D.editor,
+                            (
+                                "debt",
+                                rx.cond(
+                                    D.edit_id == "", "دين جديد", "تعديل الدين"
+                                ),
+                            ),
+                            ("payment", "تسجيل دفعة"),
+                            "تأكيد إلغاء الدفعة",
+                        ),
+                        class_name="text-xl font-bold",
+                    ),
+                    rx.el.button(
+                        rx.icon("x", class_name="h-5 w-5"),
+                        on_click=D.close_editor,
+                        aria_label="إغلاق",
+                        class_name=SECONDARY,
+                    ),
+                    class_name="mb-5 flex items-center justify-between gap-3",
+                ),
+                rx.cond(
+                    D.error != "",
+                    rx.el.p(
+                        D.error,
+                        role="alert",
+                        class_name="mb-4 rounded-xl bg-red-100 p-3 text-sm text-red-600",
+                    ),
+                ),
+                rx.el.p(
+                    "الدفعات هنا سجل يدوي للمتابعة؛ لا تُنشئ معاملات ولا تغيّر أرصدة الحسابات. سجّل التحويل الفعلي منفصلًا في دفتر المعاملات عند الحاجة لتجنب العد المزدوج.",
+                    class_name="mb-5 rounded-xl bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
+                ),
+                rx.match(
+                    D.editor,
+                    (
+                        "debt",
+                        rx.el.form(
+                            field(
+                                "عنوان الدين", "title", default=D.draft["title"]
+                            ),
+                            select_field(
+                                "الاتجاه",
+                                "direction",
+                                [
+                                    {"id": "payable", "name": "علينا"},
+                                    {"id": "receivable", "name": "لنا"},
+                                ],
+                                D.draft["direction"],
+                            ),
+                            field(
+                                "الطرف الآخر",
+                                "counterparty",
+                                default=D.draft["counterparty"],
+                            ),
+                            field(
+                                "أصل الدين",
+                                "principal",
+                                default=D.draft["principal"],
+                            ),
+                            field(
+                                "موعد أول قسط",
+                                "first_due_date",
+                                "date",
+                                D.draft["first_due_date"],
+                            ),
+                            field(
+                                "عدد الأقساط (1–120)",
+                                "installment_count",
+                                "number",
+                                D.draft["installment_count"],
+                            ),
+                            field(
+                                "ملاحظة (اختياري)",
+                                "note",
+                                default=D.draft["note"],
+                                required=False,
+                            ),
+                            rx.cond(
+                                D.edit_id != "",
+                                rx.el.p(
+                                    "بعد تسجيل أي دفعة، حتى الملغاة، يمكن تعديل العنوان والطرف والملاحظة فقط.",
+                                    class_name="text-xs leading-6 text-[#7c8178]",
+                                ),
+                            ),
+                            rx.el.button(
+                                "حفظ الدين", type="submit", class_name=BUTTON
+                            ),
+                            on_submit=D.save_debt,
+                            key=D.edit_id,
+                            class_name="space-y-4",
+                        ),
+                    ),
+                    (
+                        "payment",
+                        rx.el.form(
+                            field("المبلغ", "amount"),
+                            field("تاريخ الدفعة", "paid_on", "date", D.today),
+                            field("ملاحظة (اختياري)", "note", required=False),
+                            rx.el.button(
+                                "تأكيد تسجيل الدفعة",
+                                type="submit",
+                                class_name=BUTTON,
+                            ),
+                            on_submit=D.save_payment,
+                            key=D.edit_id,
+                            class_name="space-y-4",
+                        ),
+                    ),
+                    rx.el.div(
+                        rx.el.p(
+                            "هل تريد إلغاء هذه الدفعة؟ ستبقى في السجل بوسم ملغاة، وتُعاد حسابات الأقساط والمستحقات دونها.",
+                            class_name="mb-5 text-sm leading-7 text-[#7c8178]",
+                        ),
+                        rx.el.div(
+                            rx.el.button(
+                                "نعم، إلغاء الدفعة",
+                                on_click=D.confirm_void,
+                                class_name=BUTTON,
+                            ),
+                            rx.el.button(
+                                "الاحتفاظ بالدفعة",
+                                on_click=D.close_editor,
+                                class_name=SECONDARY,
+                            ),
+                            class_name="flex flex-wrap gap-3",
+                        ),
+                    ),
+                ),
+                role=rx.cond(D.editor == "void", "alertdialog", "dialog"),
+                aria_modal=True,
+                aria_label="إدارة الديون والدفعات",
+                class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-6",
+            ),
+            class_name="fixed inset-0 z-50 flex items-center justify-center bg-[#243747]/40 p-4",
+        ),
+    )
+
+
+def debts() -> rx.Component:
+    return shell(
+        rx.el.div(
+            rx.el.div(
+                section_title(
+                    "الديون والأقساط",
+                    "سجّل ما علينا وما لنا، وتابع الأقساط والدفعات معًا.",
+                ),
+                rx.el.button(
+                    rx.icon("plus", class_name="h-4 w-4"),
+                    "دين جديد",
+                    on_click=lambda: D.open_debt(),
+                    class_name=BUTTON,
+                ),
+                class_name="flex flex-wrap items-start justify-between gap-4",
+            ),
+            rx.el.div(
+                rx.icon("info", class_name="h-5 w-5 shrink-0"),
+                rx.el.p(
+                    "هذا سجل يدوي فقط: لا نرسل تذكيرات تلقائية ولا ننشئ معاملات أو نغيّر الأرصدة والتدفقات. عند دفع أو قبض مبلغ فعلي سجّله منفصلًا في دفتر المعاملات، ولا تسجله مرتين."
+                ),
+                class_name="mb-6 flex gap-3 rounded-xl border border-[#dce0ce] bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
+            ),
+            rx.cond(
+                D.error != "",
+                rx.el.p(
+                    D.error,
+                    role="alert",
+                    class_name="mb-5 rounded-xl bg-red-100 p-4 text-sm text-red-600",
+                ),
+            ),
+            rx.cond(
+                D.message != "",
+                rx.el.p(
+                    D.message,
+                    role="status",
+                    class_name="mb-5 rounded-xl bg-[#e9eddf] p-4 text-sm text-[#62704b]",
+                ),
+            ),
+            rx.el.div(
+                rx.el.div(
+                    rx.el.span(
+                        "المتبقي علينا", class_name="text-sm text-[#7c8178]"
+                    ),
+                    rx.el.strong(
+                        f"{D.payable_total} {S.currency}",
+                        class_name="mt-3 block text-xl font-bold tabular-nums",
+                    ),
+                    rx.el.p(
+                        f"{D.payable_overdue_count} ديون متأخرة",
+                        class_name="mt-2 text-sm text-[#a26550]",
+                    ),
+                    class_name=CARD,
+                ),
+                rx.el.div(
+                    rx.el.span(
+                        "المتبقي لنا", class_name="text-sm text-[#7c8178]"
+                    ),
+                    rx.el.strong(
+                        f"{D.receivable_total} {S.currency}",
+                        class_name="mt-3 block text-xl font-bold tabular-nums",
+                    ),
+                    rx.el.p(
+                        f"{D.receivable_overdue_count} ديون متأخرة",
+                        class_name="mt-2 text-sm text-[#a26550]",
+                    ),
+                    class_name=CARD,
+                ),
+                rx.el.div(
+                    rx.el.span(
+                        "إجمالي الديون المتأخرة",
+                        class_name="text-sm text-[#7c8178]",
+                    ),
+                    rx.el.strong(
+                        D.overdue_count,
+                        class_name="mt-4 block text-3xl font-bold text-[#a26550]",
+                    ),
+                    class_name=CARD,
+                ),
+                class_name="mb-7 grid gap-4 sm:grid-cols-3",
+            ),
+            rx.el.div(
+                rx.el.button(
+                    "الكل",
+                    on_click=lambda: D.set_filter("all"),
+                    class_name=rx.cond(
+                        D.filter_direction == "all", BUTTON, SECONDARY
+                    ),
+                ),
+                rx.el.button(
+                    "علينا",
+                    on_click=lambda: D.set_filter("payable"),
+                    class_name=rx.cond(
+                        D.filter_direction == "payable", BUTTON, SECONDARY
+                    ),
+                ),
+                rx.el.button(
+                    "لنا",
+                    on_click=lambda: D.set_filter("receivable"),
+                    class_name=rx.cond(
+                        D.filter_direction == "receivable", BUTTON, SECONDARY
+                    ),
+                ),
+                class_name="mb-5 flex flex-wrap gap-2",
+            ),
+            rx.el.section(
+                rx.el.h2("الديون النشطة", class_name="mb-4 text-xl font-bold"),
+                rx.cond(
+                    D.visible_debts.length() > 0,
+                    rx.el.div(
+                        rx.foreach(D.visible_debts, lambda row: debt_card(row)),
+                        class_name="grid items-start gap-5 lg:grid-cols-2",
+                    ),
+                    empty(
+                        "لا توجد ديون في هذا التصنيف. أضف دينًا لتبدأ المتابعة."
+                    ),
+                ),
+                class_name="mb-10",
+            ),
+            rx.el.section(
+                rx.el.h2(
+                    "الديون المؤرشفة", class_name="mb-2 text-xl font-bold"
+                ),
+                rx.el.p(
+                    "تبقى الأقساط وسجلات الدفعات محفوظة ويمكن استعادة الدين.",
+                    class_name="mb-5 text-sm text-[#7c8178]",
+                ),
+                rx.cond(
+                    D.archived_debts.length() > 0,
+                    rx.el.div(
+                        rx.foreach(
+                            D.archived_debts, lambda row: debt_card(row, True)
+                        ),
+                        class_name="grid items-start gap-5 lg:grid-cols-2",
+                    ),
+                    empty("لا توجد ديون مؤرشفة."),
+                ),
+            ),
+            debt_dialog(),
         )
     )
 

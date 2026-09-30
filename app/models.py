@@ -646,6 +646,146 @@ class SavingsGoalAllocation(Record, Base):
     )
 
 
+class Debt(Record, Base):
+    __tablename__ = "mh_debts"
+    __table_args__ = (
+        UniqueConstraint("household_id", "id", name="uq_mh_debt_tenant_id"),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "direction IN ('payable', 'receivable')", name="direction"
+        ),
+        CheckConstraint("length(trim(title)) > 0", name="title_required"),
+        CheckConstraint(
+            "length(trim(counterparty)) > 0", name="counterparty_required"
+        ),
+        CheckConstraint(
+            "principal > 0 AND principal < 1000000000000000 "
+            "AND principal <> 'NaN'::numeric",
+            name="positive_finite_principal",
+        ),
+        CheckConstraint(
+            "installment_count BETWEEN 1 AND 120", name="installment_count"
+        ),
+        Index("ix_mh_debts_household_archived", "household_id", "is_archived"),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    direction: Mapped[str] = mapped_column(String(10), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    counterparty: Mapped[str] = mapped_column(String(120), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), default=None)
+    principal: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    first_due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    installment_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
+class DebtInstallment(Record, Base):
+    __tablename__ = "mh_debt_installments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "debt_id"],
+            ["mh_debts.household_id", "mh_debts.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "household_id",
+            "debt_id",
+            "sequence_no",
+            name="uq_mh_debt_installment_sequence",
+        ),
+        CheckConstraint("sequence_no > 0", name="positive_sequence"),
+        CheckConstraint(
+            "amount > 0 AND amount < 'Infinity'::numeric "
+            "AND amount <> 'NaN'::numeric",
+            name="positive_finite_amount",
+        ),
+        Index(
+            "ix_mh_debt_installments_household_due", "household_id", "due_date"
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    debt_id: Mapped[UUID] = mapped_column(Uuid, default=None, nullable=False)
+    sequence_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    debt: Mapped["Debt"] = relationship(viewonly=True, lazy="raise")
+
+
+class DebtPayment(Record, Base):
+    __tablename__ = "mh_debt_payments"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "debt_id"],
+            ["mh_debts.household_id", "mh_debts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "amount > 0 AND amount < 'Infinity'::numeric "
+            "AND amount <> 'NaN'::numeric",
+            name="positive_finite_amount",
+        ),
+        Index(
+            "ix_mh_debt_payments_household_debt_paid",
+            "household_id",
+            "debt_id",
+            "paid_on",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    debt_id: Mapped[UUID] = mapped_column(Uuid, default=None, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    paid_on: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), default=None)
+    voided_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    debt: Mapped["Debt"] = relationship(viewonly=True, lazy="raise")
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
 class MonthlyCategoryBudget(Record, Base):
     __tablename__ = "mh_monthly_category_budgets"
     __table_args__ = (
