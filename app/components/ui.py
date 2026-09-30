@@ -13,6 +13,7 @@ NAV = [
     {"label": "الحسابات", "path": "/accounts", "icon": "wallet"},
     {"label": "المعاملات", "path": "/transactions", "icon": "arrow-left-right"},
     {"label": "الميزانيات", "path": "/budgets", "icon": "chart-pie"},
+    {"label": "الأهداف", "path": "/goals", "icon": "target"},
     {"label": "التقارير", "path": "/reports", "icon": "chart-no-axes-combined"},
 ]
 
@@ -118,7 +119,7 @@ def nav_item(item: dict[str, str]) -> rx.Component:
         rx.icon(item["icon"], class_name="h-5 w-5"),
         rx.el.span(item["label"]),
         href=item["path"],
-        class_name="flex flex-col items-center justify-center gap-1 rounded-xl px-3 py-3 text-xs font-semibold text-[#52604f] hover:bg-[#e9ecdf] md:flex-row md:gap-2 md:text-sm",
+        class_name="flex min-w-[70px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-xs font-semibold text-[#52604f] hover:bg-[#e9ecdf] md:flex-row md:gap-2 md:text-sm",
     )
 
 
@@ -190,7 +191,7 @@ def shell(content: rx.Component) -> rx.Component:
         rx.el.nav(
             rx.foreach(NAV, nav_item),
             aria_label="التنقل الرئيسي",
-            class_name="fixed inset-x-0 bottom-0 z-20 flex justify-around border-t border-[#dedacd] bg-[#fffdf8] pb-2 lg:hidden",
+            class_name="fixed inset-x-0 bottom-0 z-20 flex justify-start gap-1 overflow-x-auto border-t border-[#dedacd] bg-[#fffdf8] px-2 pb-2 lg:hidden",
         ),
         dir="rtl",
         lang="ar",

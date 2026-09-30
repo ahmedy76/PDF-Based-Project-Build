@@ -4,6 +4,7 @@ import reflex_xy
 from app.states.auth import AuthState
 from app.states.categories import CategoryState as C
 from app.states.ledger import LedgerState as S
+from app.states.goals import GoalRow, GoalState as G
 from app.components.ui import (
     BUTTON,
     SECONDARY,
@@ -393,6 +394,15 @@ def dashboard() -> rx.Component:
                 ),
                 class_name="mb-7 grid gap-6 lg:grid-cols-[0.85fr_1.4fr]",
             ),
+            rx.el.a(
+                rx.icon("target", class_name="h-5 w-5 text-[#62704b]"),
+                rx.el.span(
+                    "أهدافكم الادخارية · خصصوا مبالغ لأحلامكم يدويًا دون تغيير أرصدة الحسابات"
+                ),
+                rx.icon("arrow-left", class_name="h-4 w-4"),
+                href="/goals",
+                class_name="mb-7 flex w-full flex-wrap items-center gap-3 rounded-2xl border border-[#dce0ce] bg-[#edf0e3] px-5 py-4 text-sm font-bold text-[#62704b] hover:bg-[#e2e9d6]",
+            ),
             rx.el.div(
                 rx.el.h2("خطتنا لهذا الشهر", class_name="text-xl font-bold"),
                 rx.el.a(
@@ -711,6 +721,349 @@ def transactions() -> rx.Component:
                 ),
                 class_name="mt-8",
             ),
+        )
+    )
+
+
+def goal_history(entry: dict[str, str]) -> rx.Component:
+    return rx.el.li(
+        rx.el.div(
+            rx.el.span(
+                rx.cond(entry["kind"] == "add", "تخصيص", "تحرير"),
+                class_name=rx.cond(
+                    entry["kind"] == "add",
+                    "w-fit rounded-full bg-[#e9eddf] px-2 py-1 text-xs font-bold text-[#62704b]",
+                    "w-fit rounded-full bg-[#f1e7dd] px-2 py-1 text-xs font-bold text-[#a27456]",
+                ),
+            ),
+            rx.el.span(entry["date"], class_name="text-xs text-[#7c8178]"),
+            class_name="flex items-center gap-3",
+        ),
+        rx.el.span(
+            f"{entry['amount']} {S.currency}",
+            class_name="font-bold tabular-nums",
+        ),
+        rx.cond(
+            entry["note"] != "",
+            rx.el.p(
+                entry["note"],
+                class_name="w-full break-words text-sm text-[#7c8178]",
+            ),
+        ),
+        class_name="flex flex-wrap items-center justify-between gap-2 border-b border-[#eeebe2] py-3 last:border-0",
+        key=entry["id"],
+    )
+
+
+def goal_card(row: GoalRow, archived: bool = False) -> rx.Component:
+    return rx.el.article(
+        rx.el.div(
+            rx.el.div(
+                rx.icon("target", class_name="h-6 w-6 text-[#62704b]"),
+                rx.el.h3(
+                    row["name"],
+                    class_name="break-words text-xl font-bold text-[#27394a]",
+                ),
+                class_name="flex min-w-0 items-center gap-3",
+            ),
+            rx.el.span(
+                row["status"],
+                class_name="w-fit shrink-0 rounded-full bg-[#e9eddf] px-3 py-1 text-xs font-bold text-[#62704b]",
+            ),
+            class_name="flex flex-wrap items-center justify-between gap-3",
+        ),
+        rx.cond(
+            row["description"] != "",
+            rx.el.p(
+                row["description"],
+                class_name="mt-3 break-words text-sm leading-7 text-[#7c8178]",
+            ),
+        ),
+        rx.cond(
+            row["date"] != "",
+            rx.el.p(
+                f"التاريخ المستهدف: {row['date']}",
+                class_name="mt-3 text-sm text-[#7c8178]",
+            ),
+        ),
+        rx.el.div(
+            rx.el.div(
+                rx.el.span("مخصص يدويًا", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    f"{row['amount']} {S.currency}",
+                    class_name="block text-xl font-bold tabular-nums text-[#27394a]",
+                ),
+            ),
+            rx.el.div(
+                rx.el.span("المستهدف", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    f"{row['target']} {S.currency}",
+                    class_name="block font-bold tabular-nums",
+                ),
+            ),
+            rx.el.div(
+                rx.el.span("المتبقي", class_name="text-xs text-[#7c8178]"),
+                rx.el.strong(
+                    f"{row['remaining']} {S.currency}",
+                    class_name="block font-bold tabular-nums",
+                ),
+            ),
+            class_name="my-5 grid gap-4 rounded-xl bg-[#f6f4ec] p-4 sm:grid-cols-3",
+        ),
+        rx.el.progress(
+            value=row["progress"],
+            max="100",
+            aria_label=f"تقدم هدف {row['name']}",
+            class_name="h-2 w-full accent-[#62704b]",
+        ),
+        rx.el.p(
+            f"{row['percent']}% من المستهدف",
+            class_name="mt-2 text-left text-sm tabular-nums text-[#62704b]",
+        ),
+        rx.el.div(
+            rx.el.details(
+                rx.el.summary(
+                    f"سجل التخصيصات ({row['history'].length()})",
+                    class_name="cursor-pointer text-sm font-bold text-[#62704b]",
+                ),
+                rx.cond(
+                    row["history"].length() > 0,
+                    rx.el.ul(
+                        rx.foreach(row["history"], goal_history),
+                        class_name="mt-2",
+                    ),
+                    rx.el.p(
+                        "لم تُخصّص مبالغ بعد.",
+                        class_name="mt-3 text-sm text-[#7c8178]",
+                    ),
+                ),
+            ),
+            class_name="mt-5 border-t border-[#eeebe2] pt-4",
+        ),
+        rx.el.div(
+            rx.cond(
+                archived,
+                rx.el.button(
+                    rx.icon("archive-restore", class_name="h-4 w-4"),
+                    "استعادة",
+                    on_click=lambda: G.set_archived(row["id"], False),
+                    class_name=SECONDARY,
+                ),
+                rx.el.div(
+                    rx.el.button(
+                        "تخصيص مبلغ",
+                        on_click=lambda: G.open_allocation(row["id"], "add"),
+                        class_name=BUTTON,
+                    ),
+                    rx.el.button(
+                        "تحرير مبلغ",
+                        on_click=lambda: G.open_allocation(
+                            row["id"], "release"
+                        ),
+                        class_name=SECONDARY,
+                    ),
+                    rx.el.button(
+                        "تعديل",
+                        on_click=lambda: G.open_goal(row["id"]),
+                        class_name=SECONDARY,
+                    ),
+                    rx.el.button(
+                        "أرشفة",
+                        on_click=lambda: G.set_archived(row["id"], True),
+                        class_name=SECONDARY,
+                    ),
+                    class_name="flex flex-wrap gap-2",
+                ),
+            ),
+            class_name="mt-5 flex flex-wrap gap-2",
+        ),
+        class_name=CARD,
+        key=row["id"],
+    )
+
+
+def goal_dialog() -> rx.Component:
+    return rx.cond(
+        G.editor != "",
+        rx.el.div(
+            rx.el.section(
+                rx.el.div(
+                    rx.el.h2(
+                        rx.cond(
+                            G.editor == "goal",
+                            rx.cond(G.edit_id == "", "هدف جديد", "تعديل الهدف"),
+                            rx.cond(
+                                G.allocation_kind == "add",
+                                "تخصيص مبلغ",
+                                "تحرير مبلغ",
+                            ),
+                        ),
+                        class_name="text-xl font-bold",
+                    ),
+                    rx.el.button(
+                        rx.icon("x", class_name="h-5 w-5"),
+                        on_click=G.close_editor,
+                        aria_label="إغلاق",
+                        class_name=SECONDARY,
+                    ),
+                    class_name="mb-5 flex items-center justify-between gap-3",
+                ),
+                rx.cond(
+                    G.error != "",
+                    rx.el.p(
+                        G.error,
+                        role="alert",
+                        class_name="mb-4 rounded-xl bg-red-100 p-3 text-sm text-red-600",
+                    ),
+                ),
+                rx.el.p(
+                    "المبالغ هنا مخصصة يدويًا فقط، وليست إيداعًا أو تحويلًا. لا تتغير أرصدة الحسابات أو التدفقات النقدية.",
+                    class_name="mb-5 rounded-xl bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
+                ),
+                rx.cond(
+                    G.editor == "goal",
+                    rx.el.form(
+                        field("اسم الهدف", "name", default=G.draft["name"]),
+                        field(
+                            "المبلغ المستهدف",
+                            "target_amount",
+                            default=G.draft["target_amount"],
+                        ),
+                        field(
+                            "تاريخ مستهدف (اختياري)",
+                            "target_date",
+                            "date",
+                            G.draft["target_date"],
+                            required=False,
+                        ),
+                        field(
+                            "وصف أو ملاحظات (اختياري)",
+                            "description",
+                            default=G.draft["description"],
+                            required=False,
+                        ),
+                        rx.el.p(
+                            "سمّه كما تشاء؛ مثل صندوق للطوارئ أو رحلة عائلية.",
+                            class_name="text-xs text-[#7c8178]",
+                        ),
+                        rx.el.button(
+                            "حفظ الهدف", type="submit", class_name=BUTTON
+                        ),
+                        on_submit=G.save_goal,
+                        key=G.edit_id,
+                        class_name="space-y-4",
+                    ),
+                    rx.el.form(
+                        rx.el.p(
+                            G.allocation_name,
+                            class_name="font-bold text-[#27394a]",
+                        ),
+                        field("المبلغ", "amount"),
+                        field("ملاحظة (اختياري)", "note", required=False),
+                        rx.el.button(
+                            rx.cond(
+                                G.allocation_kind == "add",
+                                "تأكيد التخصيص",
+                                "تأكيد التحرير",
+                            ),
+                            type="submit",
+                            class_name=BUTTON,
+                        ),
+                        on_submit=G.save_allocation,
+                        key=f"{G.edit_id}-{G.allocation_kind}",
+                        class_name="space-y-4",
+                    ),
+                ),
+                role="dialog",
+                aria_modal=True,
+                aria_label="إدارة هدف الادخار",
+                class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-6",
+            ),
+            class_name="fixed inset-0 z-40 flex items-center justify-center bg-[#243747]/40 p-4",
+        ),
+    )
+
+
+def goals() -> rx.Component:
+    return shell(
+        rx.el.div(
+            rx.el.div(
+                section_title(
+                    "أهداف الادخار",
+                    "مساحة للأحلام التي تخططون لها معًا، خطوة صغيرة في كل مرة.",
+                ),
+                rx.el.button(
+                    rx.icon("plus", class_name="h-4 w-4"),
+                    "هدف جديد",
+                    on_click=lambda: G.open_goal(),
+                    class_name=BUTTON,
+                ),
+                class_name="flex flex-wrap items-start justify-between gap-4",
+            ),
+            rx.el.div(
+                rx.icon("info", class_name="h-5 w-5 shrink-0"),
+                rx.el.p(
+                    "هذه مبالغ تُخصّص يدويًا للمتابعة فقط، وليست إيداعات أو تحويلات؛ لا تتغير أرصدة الحسابات أو التدفقات النقدية أو أرقام الدخل والمصروف."
+                ),
+                class_name="mb-6 flex gap-3 rounded-xl border border-[#dce0ce] bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
+            ),
+            rx.cond(
+                G.error != "",
+                rx.el.p(
+                    G.error,
+                    role="alert",
+                    class_name="mb-5 rounded-xl bg-red-100 p-4 text-sm text-red-600",
+                ),
+            ),
+            rx.cond(
+                G.message != "",
+                rx.el.p(
+                    G.message,
+                    role="status",
+                    class_name="mb-5 rounded-xl bg-[#e9eddf] p-4 text-sm text-[#62704b]",
+                ),
+            ),
+            rx.el.section(
+                rx.el.div(
+                    rx.el.h2("الأهداف النشطة", class_name="text-xl font-bold"),
+                    rx.el.span(
+                        f"{G.active_count} أهداف · {G.completed_count} مكتملة",
+                        class_name="text-sm text-[#7c8178]",
+                    ),
+                    class_name="mb-5 flex flex-wrap items-center justify-between gap-3",
+                ),
+                rx.cond(
+                    G.goals.length() > 0,
+                    rx.el.div(
+                        rx.foreach(G.goals, goal_card),
+                        class_name="grid gap-5 lg:grid-cols-2",
+                    ),
+                    empty(
+                        "لم تضف هدفًا بعد. ابدأ باسم ومبلغ مستهدف، ثم تابع تخصيصاتك اليدوية."
+                    ),
+                ),
+                class_name="mb-10",
+            ),
+            rx.el.section(
+                rx.el.h2(
+                    "الأهداف المؤرشفة", class_name="mb-2 text-xl font-bold"
+                ),
+                rx.el.p(
+                    "تبقى تفاصيل الأهداف وسجل تخصيصاتها محفوظة، ويمكن استعادتها في أي وقت.",
+                    class_name="mb-5 text-sm text-[#7c8178]",
+                ),
+                rx.cond(
+                    G.archived_goals.length() > 0,
+                    rx.el.div(
+                        rx.foreach(
+                            G.archived_goals, lambda row: goal_card(row, True)
+                        ),
+                        class_name="grid gap-5 lg:grid-cols-2",
+                    ),
+                    empty("لا توجد أهداف مؤرشفة."),
+                ),
+            ),
+            goal_dialog(),
         )
     )
 

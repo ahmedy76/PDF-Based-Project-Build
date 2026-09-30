@@ -4,6 +4,7 @@ from app.components import screens
 from app.states.auth import AuthState
 from app.states.categories import CategoryState
 from app.states.ledger import LedgerState
+from app.states.goals import GoalState
 
 
 def index() -> rx.Component:
@@ -80,6 +81,12 @@ app.add_page(
     route="/budgets",
     title="الميزانيات | Money Harmony",
     on_load=LedgerState.load,
+)
+app.add_page(
+    screens.goals,
+    route="/goals",
+    title="أهداف الادخار | Money Harmony",
+    on_load=[LedgerState.load, GoalState.load],
 )
 app.add_page(
     screens.reports,

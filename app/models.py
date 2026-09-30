@@ -547,6 +547,105 @@ class Transaction(Record, Base):
     )
 
 
+class SavingsGoal(Record, Base):
+    __tablename__ = "mh_savings_goals"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "id", name="uq_mh_savings_goal_tenant_id"
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(trim(name)) > 0", name="name_required"),
+        CheckConstraint(
+            "target_amount > 0 AND target_amount < 'Infinity'::numeric",
+            name="positive_finite_target",
+        ),
+        Index(
+            "ix_mh_savings_goals_household_archived",
+            "household_id",
+            "is_archived",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    name: Mapped[str] = mapped_column(
+        String(120), default="", server_default=""
+    )
+    description: Mapped[str | None] = mapped_column(String(500), default=None)
+    target_amount: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), nullable=False
+    )
+    target_date: Mapped[date | None] = mapped_column(Date, default=None)
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
+class SavingsGoalAllocation(Record, Base):
+    __tablename__ = "mh_savings_goal_allocations"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "goal_id"],
+            ["mh_savings_goals.household_id", "mh_savings_goals.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "amount <> 0 AND amount > '-Infinity'::numeric "
+            "AND amount < 'Infinity'::numeric",
+            name="nonzero_finite_amount",
+        ),
+        Index(
+            "ix_mh_savings_allocations_household_goal_date",
+            "household_id",
+            "goal_id",
+            "event_date",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    goal_id: Mapped[UUID] = mapped_column(Uuid, default=None, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(
+        Uuid, default=None, nullable=False
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    event_date: Mapped[date] = mapped_column(
+        Date, server_default=func.current_date(), nullable=False
+    )
+    note: Mapped[str | None] = mapped_column(String(500), default=None)
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    goal: Mapped["SavingsGoal"] = relationship(viewonly=True, lazy="raise")
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
 class MonthlyCategoryBudget(Record, Base):
     __tablename__ = "mh_monthly_category_budgets"
     __table_args__ = (
