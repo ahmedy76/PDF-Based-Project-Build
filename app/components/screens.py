@@ -2,6 +2,7 @@ import reflex as rx
 import reflex_xy
 
 from app.states.auth import AuthState
+from app.components.landing import landing_content
 from app.states.categories import CategoryState as C
 from app.states.ledger import LedgerState as S
 from app.states.goals import GoalRow, GoalState as G
@@ -26,84 +27,7 @@ from app.components.ui import (
 
 
 def welcome() -> rx.Component:
-    return public_shell(
-        rx.el.div(
-            rx.el.div(
-                rx.el.span(
-                    "مساحة مشتركة لحياة أكثر اتزانًا",
-                    class_name="inline-block rounded-full border border-[#dce0ce] bg-[#edf0e3] px-4 py-2 text-sm text-[#62704b]",
-                ),
-                rx.el.h1(
-                    "أموالكم في تناغم،",
-                    rx.el.br(),
-                    "وبيتكم في طمأنينة.",
-                    class_name="mt-7 text-4xl font-bold leading-[1.5] tracking-tight text-[#243747] md:text-6xl",
-                ),
-                rx.el.p(
-                    "دخل، مصروف، وأحلام صغيرة تكبر معًا. اجمع تفاصيل ميزانية البيت في دفتر واحد واضح، وشارك الرحلة مع شريكك.",
-                    class_name="mt-6 max-w-lg text-lg leading-9 text-[#7b8274]",
-                ),
-                rx.el.div(
-                    rx.el.a(
-                        "ابدأ دفتر أسرتك",
-                        rx.icon("arrow-left", class_name="h-4 w-4"),
-                        href="/register",
-                        class_name=BUTTON,
-                    ),
-                    rx.el.a(
-                        "لديّ حساب بالفعل", href="/login", class_name=SECONDARY
-                    ),
-                    class_name="mt-8 flex flex-wrap gap-3",
-                ),
-                rx.el.div(
-                    rx.icon("lock-keyhole", class_name="h-4 w-4"),
-                    "بيانات أسرتك خاصة · إدخال يدوي بلا ربط بنكي",
-                    class_name="mt-7 flex items-center gap-2 text-xs text-[#828875]",
-                ),
-            ),
-            rx.el.div(
-                rx.el.div(
-                    rx.el.span("دفتر البيت", class_name="text-lg font-bold"),
-                    rx.icon(
-                        "notebook-pen", class_name="h-6 w-6 text-[#62704b]"
-                    ),
-                    class_name="mb-8 flex justify-between border-b border-[#dedacd] pb-5",
-                ),
-                rx.el.div(
-                    rx.el.div(
-                        rx.icon(
-                            "sprout", class_name="mb-3 h-9 w-9 text-[#62704b]"
-                        ),
-                        rx.el.h2(
-                            "كل خطوة تُحدث فرقًا", class_name="text-xl font-bold"
-                        ),
-                        rx.el.p(
-                            "نخطط اليوم، لنطمئن غدًا",
-                            class_name="mt-2 text-sm text-[#7c8178]",
-                        ),
-                        class_name="flex h-64 w-64 flex-col items-center justify-center rounded-full border-[14px] border-[#dfe5cf] outline-8 outline-offset-8 outline-[#ece8dc]",
-                    ),
-                    class_name="flex justify-center py-9",
-                ),
-                rx.el.div(
-                    rx.el.div(
-                        rx.icon("wallet", class_name="h-5 w-5"), "نعرف ما نملك"
-                    ),
-                    rx.el.div(
-                        rx.icon("notebook-tabs", class_name="h-5 w-5"),
-                        "نرتب ما ننفق",
-                    ),
-                    rx.el.div(
-                        rx.icon("heart-handshake", class_name="h-5 w-5"),
-                        "ندخر معًا",
-                    ),
-                    class_name="mt-8 grid grid-cols-3 gap-3 border-t border-[#dedacd] pt-6 text-center text-sm leading-8 text-[#62704b] [&>div]:flex [&>div]:flex-col [&>div]:items-center",
-                ),
-                class_name="rounded-3xl border border-[#dedacd] bg-[#fffdf8] p-7 md:rotate-[-2deg] md:p-10",
-            ),
-            class_name="grid items-center gap-12 lg:grid-cols-2",
-        )
-    )
+    return public_shell(landing_content())
 
 
 def auth_page(

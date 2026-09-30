@@ -13,6 +13,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     Index,
     Integer,
+    JSON,
     MetaData,
     Numeric,
     String,
@@ -44,6 +45,72 @@ class Record:
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class WaitlistLead(Record, Base):
+    __tablename__ = "mh_waitlist_leads"
+    __table_args__ = (
+        UniqueConstraint(
+            "contact_kind", "contact_value", name="uq_mh_waitlist_lead_contact"
+        ),
+        CheckConstraint(
+            "contact_kind IN ('email', 'phone')", name="contact_kind"
+        ),
+        CheckConstraint(
+            "length(trim(contact_value)) > 0", name="contact_required"
+        ),
+        CheckConstraint(
+            "(contact_kind = 'email' AND contact_value = lower(trim(contact_value)) "
+            "AND position('@' in contact_value) > 1) OR "
+            "(contact_kind = 'phone' AND contact_value ~ '^\\+[1-9][0-9]{1,14}$')",
+            name="normalized_contact",
+        ),
+        CheckConstraint("consent_contact = true", name="explicit_consent"),
+        CheckConstraint(
+            "json_typeof(problem_codes) = 'array'", name="problem_codes_array"
+        ),
+        CheckConstraint(
+            "length(trim(referral_code)) > 0", name="referral_code_required"
+        ),
+        CheckConstraint(
+            "referred_by_id IS NULL OR referred_by_id <> id",
+            name="not_self_referred",
+        ),
+        CheckConstraint(
+            "founder_decision IN ('pending', 'reserved', 'free')",
+            name="founder_decision",
+        ),
+        CheckConstraint(
+            "(founder_decision = 'reserved' AND reserved_at IS NOT NULL) OR "
+            "(founder_decision <> 'reserved' AND reserved_at IS NULL)",
+            name="reservation_consistency",
+        ),
+        Index("ix_mh_waitlist_leads_decision", "founder_decision"),
+        Index("ix_mh_waitlist_leads_referral", "referred_by_id"),
+    )
+    contact_kind: Mapped[str] = mapped_column(String(10), nullable=False)
+    contact_value: Mapped[str] = mapped_column(String(320), nullable=False)
+    consent_contact: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    problem_codes: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'::json"), nullable=False
+    )
+    invite_clicked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    referral_code: Mapped[str] = mapped_column(
+        String(32), unique=True, nullable=False
+    )
+    referred_by_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("mh_waitlist_leads.id", ondelete="SET NULL"),
+        default=None,
+        nullable=True,
+    )
+    founder_decision: Mapped[str] = mapped_column(
+        String(12), default="pending", server_default="pending", nullable=False
+    )
+    reserved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
     )
 
 
