@@ -4,6 +4,8 @@ import reflex_xy
 from app.states.auth import AuthState
 from app.components.landing import landing_content
 from app.components.member_access import member_access_panel
+from app.components.bills import reminder_section, reminder_card
+from app.states.bills import BillState as B
 from app.states.categories import CategoryState as C
 from app.states.ledger import LedgerState as S
 from app.states.goals import GoalRow, GoalState as G
@@ -331,6 +333,7 @@ def dashboard() -> rx.Component:
                 ),
                 class_name="mb-7 grid gap-6 lg:grid-cols-[0.85fr_1.4fr]",
             ),
+            rx.el.div(reminder_section(), class_name="mb-7"),
             rx.el.a(
                 rx.icon("target", class_name="h-5 w-5 text-[#62704b]"),
                 rx.el.span(
@@ -415,19 +418,206 @@ def archived_account_card(a: dict[str, str]) -> rx.Component:
     )
 
 
+def transfer_row(row: dict[str, str]) -> rx.Component:
+    return rx.el.li(
+        rx.el.div(
+            rx.el.div(
+                rx.icon(
+                    "arrow-left-right", class_name="h-5 w-5 text-[#62704b]"
+                ),
+                rx.el.strong(
+                    f"من {row['source']} إلى {row['destination']}",
+                    class_name="break-words text-sm font-bold text-[#27394a]",
+                ),
+                class_name="flex min-w-0 items-center gap-3",
+            ),
+            rx.el.p(
+                f"{row['transfer_date']} · {row['amount']} {row['currency']}",
+                class_name="mt-2 text-sm tabular-nums text-[#62704b]",
+            ),
+            rx.cond(
+                row["note"] != "",
+                rx.el.p(
+                    row["note"],
+                    class_name="mt-2 break-words text-sm text-[#7c8178]",
+                ),
+            ),
+            class_name="border-b border-[#eeebe2] py-4 last:border-0",
+        ),
+        key=row["id"],
+    )
+
+
+def transfer_form() -> rx.Component:
+    return rx.cond(
+        S.transfer_open,
+        rx.el.div(
+            rx.el.section(
+                rx.el.div(
+                    rx.el.h2(
+                        "تحويل بين حسابين",
+                        class_name="text-xl font-bold text-[#27394a]",
+                    ),
+                    rx.el.button(
+                        rx.icon("x", class_name="h-5 w-5"),
+                        on_click=S.close_transfer,
+                        aria_label="إغلاق نموذج التحويل",
+                        class_name=SECONDARY,
+                    ),
+                    class_name="mb-5 flex items-center justify-between gap-3",
+                ),
+                rx.el.p(
+                    "يُنقل المبلغ بين حسابين نشطين بالعملة نفسها. لا يُحسب التحويل دخلًا أو مصروفًا ولا يغيّر تقارير الميزانية.",
+                    class_name="mb-5 rounded-xl bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
+                ),
+                rx.cond(
+                    S.transfer_error != "",
+                    rx.el.p(
+                        S.transfer_error,
+                        role="alert",
+                        class_name="mb-4 rounded-xl bg-red-100 p-4 text-sm text-red-600",
+                    ),
+                ),
+                rx.cond(
+                    S.transfer_draft["source_account_id"] != "",
+                    rx.el.form(
+                        rx.el.label(
+                            rx.el.span(
+                                "من الحساب",
+                                class_name="mb-2 block text-sm font-semibold text-[#465344]",
+                            ),
+                            rx.el.div(
+                                rx.el.select(
+                                    rx.foreach(
+                                        S.accounts,
+                                        lambda a: rx.el.option(
+                                            f"{a['name']} · {a['currency']}",
+                                            value=a["id"],
+                                        ),
+                                    ),
+                                    name="source_account_id",
+                                    default_value=S.transfer_draft[
+                                        "source_account_id"
+                                    ],
+                                    on_change=S.change_transfer_source,
+                                    required=True,
+                                    class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a] focus:outline-2 focus:outline-[#62704b]",
+                                ),
+                                rx.icon(
+                                    "chevron-down",
+                                    class_name="pointer-events-none absolute left-3 top-4 h-4 w-4 text-[#62704b]",
+                                ),
+                                class_name="relative",
+                            ),
+                            class_name="block",
+                        ),
+                        rx.el.label(
+                            rx.el.span(
+                                "إلى الحساب",
+                                class_name="mb-2 block text-sm font-semibold text-[#465344]",
+                            ),
+                            rx.el.div(
+                                rx.el.select(
+                                    rx.foreach(
+                                        S.transfer_destinations,
+                                        lambda a: rx.el.option(
+                                            f"{a['name']} · {a['currency']}",
+                                            value=a["id"],
+                                        ),
+                                    ),
+                                    name="destination_account_id",
+                                    default_value=S.transfer_draft[
+                                        "destination_account_id"
+                                    ],
+                                    key=S.transfer_draft["source_account_id"],
+                                    required=True,
+                                    class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a] focus:outline-2 focus:outline-[#62704b]",
+                                ),
+                                rx.icon(
+                                    "chevron-down",
+                                    class_name="pointer-events-none absolute left-3 top-4 h-4 w-4 text-[#62704b]",
+                                ),
+                                class_name="relative",
+                            ),
+                            class_name="block",
+                        ),
+                        rx.el.p(
+                            f"عملة التحويل: {S.transfer_currency}",
+                            class_name="text-sm font-bold text-[#62704b]",
+                        ),
+                        rx.cond(
+                            S.transfer_destinations.length() == 0,
+                            rx.el.p(
+                                "لا يوجد حساب وجهة نشط بهذه العملة؛ اختر مصدرًا آخر.",
+                                class_name="text-sm text-[#a26550]",
+                            ),
+                        ),
+                        field("المبلغ", "amount"),
+                        field(
+                            "تاريخ التحويل",
+                            "transfer_date",
+                            "date",
+                            S.transfer_draft["transfer_date"],
+                        ),
+                        field("ملاحظة (اختياري)", "note", required=False),
+                        rx.el.div(
+                            rx.el.button(
+                                "تأكيد التحويل",
+                                type="submit",
+                                disabled=S.transfer_destinations.length() == 0,
+                                class_name=BUTTON,
+                            ),
+                            rx.el.button(
+                                "إلغاء",
+                                type="button",
+                                on_click=S.close_transfer,
+                                class_name=SECONDARY,
+                            ),
+                            class_name="flex flex-wrap gap-3",
+                        ),
+                        on_submit=S.save_transfer,
+                        class_name="space-y-4",
+                    ),
+                    rx.el.p(
+                        "تحتاج إلى حسابين نشطين ظاهرين لك بالعملة نفسها لإجراء التحويل.",
+                        class_name="rounded-xl border border-[#e2ded2] bg-[#faf9f3] p-4 text-sm text-[#7c8178]",
+                    ),
+                ),
+                role="dialog",
+                aria_modal=True,
+                aria_label="تحويل بين حسابين",
+                class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-6",
+            ),
+            class_name="fixed inset-0 z-40 flex items-center justify-center bg-[#243747]/40 p-4",
+        ),
+    )
+
+
 def accounts() -> rx.Component:
     return shell(
         rx.el.div(
             rx.el.div(
                 section_title(
                     "حسابات البيت",
-                    "الأرصدة المسجّلة من المعاملات غير المحذوفة؛ إغلاق الحساب يحفظ تاريخه ويفصل رصيده عن مجموع الحسابات النشطة.",
+                    "الأرصدة المسجّلة من المعاملات غير المحذوفة والتحويلات؛ إغلاق الحساب يحفظ تاريخه ويفصل رصيده عن مجموع الحسابات النشطة.",
                 ),
-                rx.el.button(
-                    rx.icon("plus", class_name="h-4 w-4"),
-                    "إضافة حساب",
-                    on_click=lambda: S.open_editor("account"),
-                    class_name=BUTTON,
+                rx.el.div(
+                    rx.cond(
+                        S.can_add_transactions,
+                        rx.el.button(
+                            rx.icon("arrow-left-right", class_name="h-4 w-4"),
+                            "تحويل بين حسابين",
+                            on_click=S.open_transfer,
+                            class_name=SECONDARY,
+                        ),
+                    ),
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        "إضافة حساب",
+                        on_click=lambda: S.open_editor("account"),
+                        class_name=BUTTON,
+                    ),
+                    class_name="flex flex-wrap gap-2",
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
             ),
@@ -472,6 +662,25 @@ def accounts() -> rx.Component:
                     ),
                 ),
             ),
+            rx.el.section(
+                rx.el.h2(
+                    "سجل التحويلات",
+                    class_name="text-xl font-bold text-[#27394a]",
+                ),
+                rx.el.p(
+                    "حركة مستقلة عن سجل الدخل والمصروف؛ تُعرض فقط التحويلات بين حسابات يمكنك رؤيتها.",
+                    class_name="mb-4 mt-1 text-sm text-[#7c8178]",
+                ),
+                rx.cond(
+                    S.transfers.length() > 0,
+                    rx.el.ul(
+                        rx.foreach(S.transfers, transfer_row), class_name="px-5"
+                    ),
+                    empty("لا توجد تحويلات بين حساباتك الظاهرة بعد."),
+                ),
+                class_name="mt-9 rounded-2xl border border-[#e2ded2] bg-[#fffdf8] p-5 md:p-7",
+            ),
+            transfer_form(),
         )
     )
 
@@ -1513,6 +1722,7 @@ def debts() -> rx.Component:
                     empty("لا توجد ديون مؤرشفة."),
                 ),
             ),
+            rx.el.div(reminder_section(), class_name="mt-8"),
             debt_dialog(),
         )
     )
@@ -1699,6 +1909,27 @@ def notifications() -> rx.Component:
                     class_name=SECONDARY,
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-3",
+            ),
+            rx.el.section(
+                rx.el.h2(
+                    "تذكيرات الاستحقاق داخل التطبيق",
+                    class_name="mb-2 text-xl font-bold text-[#27394a]",
+                ),
+                rx.el.p(
+                    "تُحدّث عند زيارة الدفتر والإشعارات والديون والفواتير فقط، ولا نرسل بريدًا أو نعمل في الخلفية.",
+                    class_name="mb-4 text-sm text-[#7c8178]",
+                ),
+                rx.cond(
+                    B.reminders.length() > 0,
+                    rx.el.div(
+                        rx.foreach(B.reminders, reminder_card),
+                        class_name="space-y-3",
+                    ),
+                    empty(
+                        "لا توجد استحقاقات قريبة غير مسددة، أو أن تذكيراتك معطّلة."
+                    ),
+                ),
+                class_name="mb-7",
             ),
             rx.cond(
                 S.budget_alert_note != "",

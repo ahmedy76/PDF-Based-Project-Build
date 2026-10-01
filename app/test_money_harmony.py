@@ -140,6 +140,7 @@ class MoneyRulesTests(unittest.TestCase):
             [],
             [],
             [],
+            [],
         ]
         db.scalars.side_effect = [
             Mock(all=Mock(return_value=rows)) for rows in result_sets
@@ -388,6 +389,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
                     transaction(date(2026, 1, 10), "70.00"),
                     transaction(date(2026, 1, 12), "60.00"),
                 ],
+                [],
                 rows,
                 [],
                 [],
@@ -429,11 +431,11 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.dashboard_budgets[0]["progress"], "100")
         self.assertEqual(state.dashboard_budgets[0]["status"], "تجاوز الحد")
         self.assertEqual(state.dashboard_budgets[0]["month"], "2026-01")
-        query = db.scalars.call_args_list[5].args[0]
+        query = db.scalars.call_args_list[6].args[0]
         compiled = str(query.compile(compile_kwargs={"literal_binds": True}))
         self.assertIn("2025", compiled)
         self.assertIn("2026", compiled)
-        self.assertEqual(db.scalars.call_count, 10)
+        self.assertEqual(db.scalars.call_count, 11)
 
     def test_previous_month_does_not_fill_empty_current_month(self):
         state = LedgerState()
@@ -453,7 +455,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.budget_month, "2026-01")
         self.assertEqual([b["id"] for b in state.budgets], [str(january.id)])
         self.assertEqual(state.budgets, state.dashboard_budgets)
-        self.assertEqual(db.scalars.call_count, 10)
+        self.assertEqual(db.scalars.call_count, 11)
         event = LedgerState.change_month.fn(state, {"month": "2025-12"})
         self.assertIsNotNone(await anext(event))
         with self.assertRaises(StopAsyncIteration):

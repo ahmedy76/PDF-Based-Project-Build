@@ -11,7 +11,7 @@ from typing import Any, TypedDict
 from uuid import UUID
 
 import reflex_xy
-from sqlalchemy import select, func, tuple_
+from sqlalchemy import select, func, tuple_, or_
 from app import models as m
 from app.states.auth import (
     AuthState,
@@ -85,6 +85,16 @@ class LedgerState(rx.State):
     categories: list[dict[str, str]] = []
     archived_categories: list[dict[str, str]] = []
     transactions: list[dict[str, str]] = []
+    transfers: list[dict[str, str]] = []
+    transfer_open: bool = False
+    transfer_error: str = ""
+    transfer_draft: dict[str, str] = {
+        "source_account_id": "",
+        "destination_account_id": "",
+        "amount": "",
+        "transfer_date": "",
+        "note": "",
+    }
     history_id: str = ""
     history_title: str = ""
     history_legacy: str = ""
@@ -164,6 +174,26 @@ class LedgerState(rx.State):
             ),
             "",
         )
+
+    @rx.var
+    def transfer_currency(self) -> str:
+        return next(
+            (
+                a["currency"]
+                for a in self.accounts
+                if a["id"] == self.transfer_draft["source_account_id"]
+            ),
+            "",
+        )
+
+    @rx.var
+    def transfer_destinations(self) -> list[dict[str, str]]:
+        return [
+            a
+            for a in self.accounts
+            if a["currency"] == self.transfer_currency
+            and a["id"] != self.transfer_draft["source_account_id"]
+        ]
 
     @rx.var
     def pending_count(self) -> int:
@@ -356,13 +386,20 @@ class LedgerState(rx.State):
             )
         ]
 
-    def _account_balances(self, accounts, txs):
+    def _account_balances(self, accounts, txs, transfers=()):
         balances = {a.id: a.opening_balance for a in accounts}
         for t in txs:
             if t.account_id in balances:
                 balances[t.account_id] += (
                     t.amount if t.kind == "income" else -t.amount
                 )
+        for transfer in transfers:
+            if (
+                transfer.source_account_id in balances
+                and transfer.destination_account_id in balances
+            ):
+                balances[transfer.source_account_id] -= transfer.amount
+                balances[transfer.destination_account_id] += transfer.amount
         return balances
 
     def _validate_transaction_account(self, record, account, original_account):
@@ -763,6 +800,32 @@ class LedgerState(rx.State):
                 m.Transaction.created_at.desc(),
             )
         ).all()
+        transfers = db.scalars(
+            select(m.AccountTransfer)
+            .where(
+                m.AccountTransfer.household_id == hid,
+                m.AccountTransfer.source_account_id.in_(allowed_ids),
+                m.AccountTransfer.destination_account_id.in_(allowed_ids),
+            )
+            .order_by(
+                m.AccountTransfer.transfer_date.desc(),
+                m.AccountTransfer.created_at.desc(),
+            )
+        ).all()
+        self.transfers = [
+            {
+                "id": str(t.id),
+                "source": account_names[t.source_account_id],
+                "destination": account_names[t.destination_account_id],
+                "currency": t.currency,
+                "amount": f"{t.amount:,.4f}",
+                "transfer_date": t.transfer_date.isoformat(),
+                "note": t.note or "",
+            }
+            for t in transfers
+            if t.source_account_id in account_names
+            and t.destination_account_id in account_names
+        ]
         audit_rows = (
             db.execute(
                 select(m.TransactionAuditEvent, m.User.display_name)
@@ -843,7 +906,7 @@ class LedgerState(rx.State):
             if txs
             else {}
         )
-        balances = self._account_balances(accounts, txs)
+        balances = self._account_balances(accounts, txs, transfers)
         account_rows = [
             {
                 "id": str(a.id),
@@ -1055,6 +1118,7 @@ class LedgerState(rx.State):
                 ("partner_transaction", "معاملات الشريك"),
                 ("budget_warning", "الاقتراب من الميزانية"),
                 ("budget_exceeded", "تجاوز الميزانية"),
+                ("reminder", "تذكيرات الفواتير والأقساط"),
             ]
         ]
         start, end = self._report_bounds(today)
@@ -1127,6 +1191,16 @@ class LedgerState(rx.State):
         self.accounts = []
         self.archived_accounts = []
         self.transactions = []
+        self.transfers = []
+        self.transfer_open = False
+        self.transfer_error = ""
+        self.transfer_draft = {
+            "source_account_id": "",
+            "destination_account_id": "",
+            "amount": "",
+            "transfer_date": "",
+            "note": "",
+        }
         self.recurring_rules = []
         self.budgets = []
         self.dashboard_budgets = []
@@ -1407,6 +1481,163 @@ class LedgerState(rx.State):
                     )
                 ),
             }
+
+    @rx.event
+    def open_transfer(self):
+        self.transfer_error = ""
+        self.message = ""
+        self.transfer_open = True
+        source = next(
+            (
+                a
+                for a in self.accounts
+                if any(
+                    b["id"] != a["id"] and b["currency"] == a["currency"]
+                    for b in self.accounts
+                )
+            ),
+            None,
+        )
+        destination = next(
+            (
+                a
+                for a in self.accounts
+                if source
+                and a["id"] != source["id"]
+                and a["currency"] == source["currency"]
+            ),
+            None,
+        )
+        self.transfer_draft = {
+            "source_account_id": source["id"] if source else "",
+            "destination_account_id": destination["id"] if destination else "",
+            "amount": "",
+            "transfer_date": date.today().isoformat(),
+            "note": "",
+        }
+
+    @rx.event
+    def close_transfer(self):
+        self.transfer_open = False
+        self.transfer_error = ""
+
+    @rx.event
+    def change_transfer_source(self, value: str):
+        source = next((a for a in self.accounts if a["id"] == value), None)
+        destination = next(
+            (
+                a
+                for a in self.accounts
+                if source
+                and a["id"] != source["id"]
+                and a["currency"] == source["currency"]
+            ),
+            None,
+        )
+        self.transfer_draft = {
+            **self.transfer_draft,
+            "source_account_id": value if source else "",
+            "destination_account_id": destination["id"] if destination else "",
+        }
+        self.transfer_error = ""
+
+    @rx.event
+    async def save_transfer(self, data: dict[str, Any]):
+        try:
+            auth = await self.get_state(AuthState)
+
+            def save_sync(db):
+                user, member = auth._household(db)
+                hid = member.household_id
+                require_permission(member, "can_add_transactions")
+                try:
+                    source_id = UUID(str(data.get("source_account_id", "")))
+                    destination_id = UUID(
+                        str(data.get("destination_account_id", ""))
+                    )
+                except (ValueError, TypeError) as e:
+                    raise ValueError("اختر حسابين صالحين للتحويل.") from e
+                if source_id == destination_id:
+                    raise ValueError("اختر حسابين مختلفين للتحويل.")
+                db.scalar(
+                    select(m.Household)
+                    .where(m.Household.id == hid)
+                    .with_for_update()
+                )
+                locked = db.scalars(
+                    select(m.FinancialAccount)
+                    .where(
+                        m.FinancialAccount.household_id == hid,
+                        m.FinancialAccount.id.in_([source_id, destination_id]),
+                        m.FinancialAccount.is_archived.is_(False),
+                    )
+                    .order_by(m.FinancialAccount.id)
+                    .with_for_update()
+                ).all()
+                accounts = {a.id: a for a in locked}
+                if source_id not in accounts or destination_id not in accounts:
+                    raise ValueError("الحساب غير متاح أو مغلق في هذه الأسرة.")
+                require_account(db, member, source_id)
+                require_account(db, member, destination_id)
+                source, destination = (
+                    accounts[source_id],
+                    accounts[destination_id],
+                )
+                if source.currency != destination.currency:
+                    raise ValueError(
+                        "التحويل متاح فقط بين حسابين بالعملة نفسها."
+                    )
+                amount = self._money(str(data.get("amount", "")).strip(), True)
+                date_value = str(data.get("transfer_date", ""))
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date_value):
+                    raise ValueError("أدخل تاريخ تحويل صالحًا بصيغة YYYY-MM-DD.")
+                try:
+                    day = date.fromisoformat(date_value)
+                except ValueError as e:
+                    raise ValueError(
+                        "أدخل تاريخ تحويل صالحًا بصيغة YYYY-MM-DD."
+                    ) from e
+                if (
+                    day < max(source.opening_date, destination.opening_date)
+                    or day > date.today()
+                ):
+                    raise ValueError(
+                        "تاريخ التحويل يجب أن يكون بين افتتاح الحسابين واليوم."
+                    )
+                note = str(data.get("note", "")).strip()
+                if len(note) > 500:
+                    raise ValueError("الملاحظة لا يمكن أن تتجاوز 500 حرف.")
+                db.add(
+                    m.AccountTransfer(
+                        household_id=hid,
+                        created_by_user_id=user.id,
+                        source_account_id=source_id,
+                        destination_account_id=destination_id,
+                        currency=source.currency,
+                        amount=amount,
+                        transfer_date=day,
+                        note=note or None,
+                    )
+                )
+                db.commit()
+                self._load(db, user, member)
+
+            async with rx.asession() as db:
+                await db.run_sync(save_sync)
+            self.transfer_open = False
+            self.transfer_error = ""
+            self.message = (
+                "تم التحويل بين الحسابين بنجاح، دون تسجيل دخل أو مصروف."
+            )
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.transfer_error = ""
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.transfer_error = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.transfer_error = "تعذر حفظ التحويل. راجع الحقول وحاول مجددًا."
 
     @rx.event
     def change_editor_account(self, value: str):
@@ -1696,9 +1927,28 @@ class LedgerState(rx.State):
                         if self.edit_id
                         else None
                     )
-                    if earliest and opening > earliest:
+                    earliest_transfer = (
+                        sync_db.scalar(
+                            select(
+                                func.min(m.AccountTransfer.transfer_date)
+                            ).where(
+                                m.AccountTransfer.household_id == hid,
+                                or_(
+                                    m.AccountTransfer.source_account_id
+                                    == record.id,
+                                    m.AccountTransfer.destination_account_id
+                                    == record.id,
+                                ),
+                            )
+                        )
+                        if self.edit_id
+                        else None
+                    )
+                    if (earliest and opening > earliest) or (
+                        earliest_transfer and opening > earliest_transfer
+                    ):
                         raise ValueError(
-                            "تاريخ الافتتاح يجب أن يسبق معاملات الحساب."
+                            "تاريخ الافتتاح يجب أن يسبق معاملات الحساب وتحويلاته."
                         )
                     record.name, record.account_type = name, kind
                     record.opening_balance = self._money(
@@ -2484,6 +2734,7 @@ class LedgerState(rx.State):
                 "partner_transaction",
                 "budget_warning",
                 "budget_exceeded",
+                "reminder",
             ):
                 raise ValueError("تفضيل غير صالح.")
             auth = await self.get_state(AuthState)

@@ -550,6 +550,80 @@ class RecurringTransactionRule(Record, Base):
     category: Mapped["Category"] = relationship(viewonly=True, lazy="raise")
 
 
+class AccountTransfer(Record, Base):
+    __tablename__ = "mh_account_transfers"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "source_account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            name="fk_mh_account_transfers_source_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "destination_account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            name="fk_mh_account_transfers_destination_account",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "source_account_id <> destination_account_id",
+            name="distinct_accounts",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint(
+            "amount > 0 AND amount < 'Infinity'::numeric "
+            "AND amount <> 'NaN'::numeric",
+            name="positive_finite_amount",
+        ),
+        Index(
+            "ix_mh_account_transfers_source_date",
+            "household_id",
+            "source_account_id",
+            "transfer_date",
+        ),
+        Index(
+            "ix_mh_account_transfers_destination_date",
+            "household_id",
+            "destination_account_id",
+            "transfer_date",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    source_account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    destination_account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    transfer_date: Mapped[date] = mapped_column(Date, nullable=False)
+    note: Mapped[str | None] = mapped_column(String(500), default=None)
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    source_account: Mapped["FinancialAccount"] = relationship(
+        foreign_keys=[household_id, source_account_id],
+        viewonly=True,
+        lazy="raise",
+    )
+    destination_account: Mapped["FinancialAccount"] = relationship(
+        foreign_keys=[household_id, destination_account_id],
+        viewonly=True,
+        lazy="raise",
+    )
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
 class Transaction(Record, Base):
     __tablename__ = "mh_transactions"
     __table_args__ = (
@@ -921,6 +995,76 @@ class DebtInstallment(Record, Base):
     debt: Mapped["Debt"] = relationship(viewonly=True, lazy="raise")
 
 
+class Bill(Record, Base):
+    __tablename__ = "mh_bills"
+    __table_args__ = (
+        UniqueConstraint("household_id", "id", name="uq_mh_bill_tenant_id"),
+        ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(trim(title)) > 0", name="title_required"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint(
+            "amount > 0 AND amount < 'Infinity'::numeric "
+            "AND amount <> 'NaN'::numeric",
+            name="positive_finite_amount",
+        ),
+        CheckConstraint("status IN ('unpaid', 'paid')", name="status"),
+        CheckConstraint(
+            "(status = 'paid' AND paid_on IS NOT NULL) OR "
+            "(status = 'unpaid' AND paid_on IS NULL)",
+            name="paid_date_consistency",
+        ),
+        CheckConstraint(
+            "remind_days BETWEEN 0 AND 365", name="remind_days_range"
+        ),
+        Index("ix_mh_bills_household_due", "household_id", "due_date"),
+        Index(
+            "ix_mh_bills_household_account_due",
+            "household_id",
+            "account_id",
+            "due_date",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    # An account is required so account restrictions and currency are unambiguous.
+    account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(10), default="unpaid", server_default="unpaid", nullable=False
+    )
+    paid_on: Mapped[date | None] = mapped_column(Date, default=None)
+    remind_days: Mapped[int] = mapped_column(
+        Integer, default=3, server_default="3", nullable=False
+    )
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    account: Mapped["FinancialAccount"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
 class DebtPayment(Record, Base):
     __tablename__ = "mh_debt_payments"
     __table_args__ = (
@@ -1144,6 +1288,100 @@ class PartnerInvitation(Record, Base):
         foreign_keys=[household_id, accepted_by_user_id],
         viewonly=True,
         lazy="raise",
+    )
+
+
+class ReminderDelivery(Record, Base):
+    __tablename__ = "mh_reminder_deliveries"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "recipient_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "bill_id"],
+            ["mh_bills.household_id", "mh_bills.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["installment_id"],
+            ["mh_debt_installments.id"],
+            ondelete="RESTRICT",
+        ),
+        UniqueConstraint(
+            "household_id",
+            "recipient_user_id",
+            "channel",
+            "source_kind",
+            "source_id",
+            "due_date",
+            name="uq_mh_reminder_delivery_occurrence",
+        ),
+        CheckConstraint("channel IN ('in_app', 'email')", name="channel"),
+        CheckConstraint(
+            "source_kind IN ('bill', 'installment')", name="source_kind"
+        ),
+        CheckConstraint(
+            "(source_kind = 'bill' AND bill_id IS NOT NULL "
+            "AND bill_id = source_id AND installment_id IS NULL) OR "
+            "(source_kind = 'installment' AND installment_id IS NOT NULL "
+            "AND installment_id = source_id AND bill_id IS NULL)",
+            name="source_reference",
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'sent', 'failed', 'suppressed')",
+            name="status",
+        ),
+        CheckConstraint(
+            "(status = 'sent' AND delivered_at IS NOT NULL) OR "
+            "(status <> 'sent' AND delivered_at IS NULL)",
+            name="delivery_time",
+        ),
+        Index(
+            "ix_mh_reminder_deliveries_pending",
+            "household_id",
+            "channel",
+            "status",
+            "scheduled_at",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    recipient_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    channel: Mapped[str] = mapped_column(
+        String(10), default="in_app", server_default="in_app", nullable=False
+    )
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    bill_id: Mapped[UUID | None] = mapped_column(Uuid, default=None)
+    installment_id: Mapped[UUID | None] = mapped_column(Uuid, default=None)
+    due_date: Mapped[date] = mapped_column(Date, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), default="pending", server_default="pending", nullable=False
+    )
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    attempted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None
+    )
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    recipient_membership: Mapped["HouseholdMembership"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    bill: Mapped["Bill | None"] = relationship(viewonly=True, lazy="raise")
+    installment: Mapped["DebtInstallment | None"] = relationship(
+        viewonly=True, lazy="raise"
     )
 
 

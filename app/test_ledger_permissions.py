@@ -115,6 +115,17 @@ class RestrictedLedgerLoad(unittest.TestCase):
                 [fixture.accounts[0].id, fixture.accounts[2].id],
                 [],
                 fixture.txs[1:2],
+                [
+                    SimpleNamespace(
+                        id=uuid4(),
+                        source_account_id=fixture.accounts[1].id,
+                        destination_account_id=fixture.accounts[0].id,
+                        amount=__import__("decimal").Decimal("999"),
+                        currency="USD",
+                        transfer_date=fixture.today,
+                        note="معلومة محجوبة",
+                    )
+                ],
                 fixture.budgets,
                 [],
                 [],
@@ -141,6 +152,13 @@ class RestrictedLedgerLoad(unittest.TestCase):
         self.assertEqual(state.budgets[0]["spent"], "50.00")
         self.assertFalse(state.can_add_transactions)
         self.assertFalse(state.can_edit_budgets)
+        self.assertEqual(state.transfers, [])
+        transfer_sql = str(db.scalars.call_args_list[6].args[0])
+        self.assertIn("mh_account_transfers.household_id", transfer_sql)
+        self.assertIn("mh_account_transfers.source_account_id IN", transfer_sql)
+        self.assertIn(
+            "mh_account_transfers.destination_account_id IN", transfer_sql
+        )
         sql = str(db.scalars.call_args_list[5].args[0])
         self.assertIn("mh_transactions.account_id IN", sql)
 

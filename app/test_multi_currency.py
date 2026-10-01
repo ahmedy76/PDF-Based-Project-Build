@@ -59,7 +59,7 @@ class MultiCurrencyTests(unittest.TestCase):
             for currency in ("SAR", "USD")
         ]
 
-    def load(self, state):
+    def load(self, state, transfers=()):
         db = Mock()
         db.get.return_value = SimpleNamespace(name="أسرة", currency="SAR")
         db.execute.return_value.all.return_value = []
@@ -71,6 +71,7 @@ class MultiCurrencyTests(unittest.TestCase):
                 self.accounts,
                 [],
                 self.txs,
+                transfers,
                 self.budgets,
                 [],
                 [],

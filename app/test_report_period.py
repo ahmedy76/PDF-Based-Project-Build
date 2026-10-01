@@ -178,6 +178,7 @@ class ReportAggregationTests(unittest.TestCase):
                 [account],
                 [],
                 transactions,
+                [],
                 [budget],
                 [],
                 [],

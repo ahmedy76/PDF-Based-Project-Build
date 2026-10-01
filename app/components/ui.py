@@ -15,6 +15,7 @@ NAV = [
     {"label": "الميزانيات", "path": "/budgets", "icon": "chart-pie"},
     {"label": "الأهداف", "path": "/goals", "icon": "target"},
     {"label": "الديون", "path": "/debts", "icon": "hand-coins"},
+    {"label": "الفواتير", "path": "/bills", "icon": "receipt-text"},
     {"label": "التقارير", "path": "/reports", "icon": "chart-no-axes-combined"},
 ]
 
@@ -562,7 +563,7 @@ def editor() -> rx.Component:
                                     S.draft["opening_date"],
                                 ),
                                 rx.el.p(
-                                    "اختر العملة بعناية؛ لا يمكن تغييرها بعد إنشاء الحساب. الرصيد الحالي = الافتتاحي + الدخل − المصروف بنفس العملة.",
+                                    "اختر العملة بعناية؛ لا يمكن تغييرها بعد إنشاء الحساب. الرصيد الحالي = الافتتاحي + الدخل − المصروف − التحويلات الصادرة + التحويلات الواردة بنفس العملة.",
                                     class_name="text-xs leading-6 text-[#7c8178]",
                                 ),
                                 class_name="space-y-4",

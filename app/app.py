@@ -1,6 +1,8 @@
 import reflex as rx
 
 from app.components import screens
+from app.components.bills import bills_page
+from app.states.bills import BillState
 from app.states.auth import AuthState
 from app.states.categories import CategoryState
 from app.states.ledger import LedgerState
@@ -64,7 +66,7 @@ app.add_page(
     screens.dashboard,
     route="/dashboard",
     title="دفتر الأسرة | Money Harmony",
-    on_load=LedgerState.load,
+    on_load=[LedgerState.load, BillState.load],
 )
 app.add_page(
     screens.accounts,
@@ -94,7 +96,13 @@ app.add_page(
     screens.debts,
     route="/debts",
     title="الديون والأقساط | Money Harmony",
-    on_load=[LedgerState.load, DebtState.load],
+    on_load=[LedgerState.load, DebtState.load, BillState.load],
+)
+app.add_page(
+    bills_page,
+    route="/bills",
+    title="الفواتير | Money Harmony",
+    on_load=[LedgerState.load, BillState.load],
 )
 app.add_page(
     screens.reports,
@@ -106,7 +114,7 @@ app.add_page(
     screens.notifications,
     route="/notifications",
     title="الإشعارات | Money Harmony",
-    on_load=LedgerState.load,
+    on_load=[LedgerState.load, BillState.load],
 )
 app.add_page(
     screens.settings,
