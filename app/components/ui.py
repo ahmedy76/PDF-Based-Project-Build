@@ -174,6 +174,7 @@ def shell(content: rx.Component) -> rx.Component:
                     content,
                     editor(),
                     delete_confirmation(),
+                    transaction_history(),
                     class_name="mx-auto w-full max-w-[1320px]",
                 ),
                 rx.el.div(
@@ -292,6 +293,23 @@ def transaction_row(row) -> rx.Component:
                     f"{row['category']} · {row['account']} · {row['transaction_date']}",
                     class_name="mt-1 text-xs text-[#828679]",
                 ),
+                rx.el.p(
+                    row["metadata"], class_name="mt-1 text-xs text-[#7c8178]"
+                ),
+                rx.cond(
+                    row["editor_metadata"] != "",
+                    rx.el.p(
+                        row["editor_metadata"],
+                        class_name="text-xs text-[#7c8178]",
+                    ),
+                ),
+                rx.cond(
+                    row["legacy_metadata"] != "",
+                    rx.el.p(
+                        row["legacy_metadata"],
+                        class_name="text-xs text-[#9a917f]",
+                    ),
+                ),
             ),
             class_name="flex min-w-0 items-center gap-3",
         ),
@@ -305,8 +323,23 @@ def transaction_row(row) -> rx.Component:
                     "text-left font-bold tabular-nums text-[#a26550]",
                 ),
             ),
-            edit_actions("transaction", row),
-            class_name="shrink-0",
+            rx.el.div(
+                rx.el.button(
+                    rx.icon("history", class_name="h-4 w-4"),
+                    "سجل التعديلات",
+                    on_click=lambda: S.show_transaction_history(row["id"]),
+                    class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                ),
+                rx.el.button(
+                    rx.icon("copy", class_name="h-4 w-4"),
+                    "إعادة استخدام البيانات",
+                    on_click=lambda: S.reuse_transaction(row["id"]),
+                    class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                ),
+                edit_actions("transaction", row),
+                class_name="flex flex-wrap justify-end gap-1",
+            ),
+            class_name="min-w-0 sm:shrink-0",
         ),
         class_name="flex flex-wrap items-center justify-between gap-3 border-b border-[#eeebe2] py-4 last:border-0",
         key=row["id"],
@@ -431,14 +464,35 @@ def editor() -> rx.Component:
                         (
                             "transaction",
                             rx.el.div(
-                                select_field(
-                                    "نوع المعاملة",
-                                    "kind",
-                                    [
-                                        {"id": "expense", "name": "مصروف"},
-                                        {"id": "income", "name": "دخل"},
-                                    ],
-                                    S.draft["kind"],
+                                rx.el.label(
+                                    rx.el.span(
+                                        "نوع المعاملة",
+                                        class_name="mb-2 block text-sm font-semibold text-[#465344]",
+                                    ),
+                                    rx.el.div(
+                                        rx.el.select(
+                                            rx.el.option(
+                                                "مصروف", value="expense"
+                                            ),
+                                            rx.el.option("دخل", value="income"),
+                                            name="kind",
+                                            default_value=S.draft["kind"],
+                                            on_change=S.change_transaction_kind,
+                                            class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white px-3 py-3 pl-9 text-base text-[#27394a]",
+                                        ),
+                                        rx.icon(
+                                            "chevron-down",
+                                            class_name="pointer-events-none absolute left-3 top-4 h-4 w-4 text-[#7c8178]",
+                                        ),
+                                        class_name="relative",
+                                    ),
+                                ),
+                                rx.cond(
+                                    S.transaction_account_options.length() == 0,
+                                    rx.el.p(
+                                        "لا توجد حسابات نشطة. أضف حسابًا من صفحة الحسابات قبل تسجيل معاملة جديدة.",
+                                        class_name="text-sm text-[#a26550]",
+                                    ),
                                 ),
                                 select_field(
                                     "الحساب",
@@ -464,6 +518,8 @@ def editor() -> rx.Component:
                                             default_value=S.draft[
                                                 "category_id"
                                             ],
+                                            key=S.draft["kind"],
+                                            on_change=S.change_transaction_category,
                                             class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a]",
                                         ),
                                         rx.icon(
@@ -471,6 +527,14 @@ def editor() -> rx.Component:
                                             class_name="pointer-events-none absolute left-3 top-4 h-4 w-4",
                                         ),
                                         class_name="relative",
+                                    ),
+                                ),
+                                rx.cond(
+                                    S.transaction_category_options.length()
+                                    == 0,
+                                    rx.el.p(
+                                        "لا توجد فئة نشطة لهذا النوع. أضف فئة مناسبة من صفحة فئات الأسرة.",
+                                        class_name="text-sm text-[#a26550]",
                                     ),
                                 ),
                                 rx.cond(
@@ -485,6 +549,13 @@ def editor() -> rx.Component:
                                     "إدارة فئات الدخل والمصروف",
                                     href="/categories",
                                     class_name="inline-flex items-center gap-2 text-sm font-bold text-[#62704b] hover:underline",
+                                ),
+                                rx.cond(
+                                    S.edit_id == "",
+                                    rx.el.p(
+                                        "تعبئة البيانات لا تُسجّل معاملة تلقائيًا. أدخل المبلغ وراجع التفاصيل ثم اضغط حفظ.",
+                                        class_name="text-xs leading-6 text-[#7c8178]",
+                                    ),
                                 ),
                                 field(
                                     "المبلغ",
@@ -662,6 +733,90 @@ def editor() -> rx.Component:
                 class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-6",
             ),
             class_name="fixed inset-0 z-40 flex items-center justify-center bg-[#243747]/40 p-4",
+        ),
+    )
+
+
+def history_change(change) -> rx.Component:
+    return rx.el.li(
+        rx.el.span(
+            f"{change['field']}: ", class_name="font-bold text-[#27394a]"
+        ),
+        rx.el.span(change["before"]),
+        rx.icon(
+            "arrow-left", class_name="inline-block h-3 w-3 mx-2 text-[#62704b]"
+        ),
+        rx.el.span(change["after"]),
+        class_name="break-words text-sm leading-7 text-[#596456]",
+    )
+
+
+def history_event(event) -> rx.Component:
+    return rx.el.li(
+        rx.el.div(
+            rx.el.strong(event["action"], class_name="text-[#27394a]"),
+            rx.el.span(
+                event["date"], class_name="text-xs tabular-nums text-[#7c8178]"
+            ),
+            class_name="flex flex-wrap justify-between gap-2",
+        ),
+        rx.el.p(event["actor"], class_name="mt-1 text-xs text-[#62704b]"),
+        rx.el.ul(
+            rx.foreach(event["changes"], history_change),
+            class_name="mt-2 space-y-1",
+        ),
+        class_name="rounded-xl border border-[#e2ded2] bg-[#faf9f3] p-4",
+        key=event["id"],
+    )
+
+
+def transaction_history() -> rx.Component:
+    return rx.cond(
+        S.history_id != "",
+        rx.el.div(
+            rx.el.section(
+                rx.el.div(
+                    rx.el.div(
+                        rx.el.h2(
+                            "سجل التعديلات",
+                            class_name="text-xl font-bold text-[#27394a]",
+                        ),
+                        rx.el.p(
+                            S.history_title, class_name="text-sm text-[#7c8178]"
+                        ),
+                    ),
+                    rx.el.button(
+                        rx.icon("x", class_name="h-5 w-5"),
+                        on_click=S.close_transaction_history,
+                        aria_label="إغلاق سجل التعديلات",
+                        class_name=SECONDARY,
+                    ),
+                    class_name="mb-5 flex items-start justify-between gap-3",
+                ),
+                rx.cond(
+                    S.history_legacy != "",
+                    rx.el.p(
+                        S.history_legacy,
+                        class_name="mb-4 rounded-xl bg-[#f6f4ec] p-3 text-sm leading-7 text-[#596456]",
+                    ),
+                ),
+                rx.cond(
+                    S.history_events.length() > 0,
+                    rx.el.ol(
+                        rx.foreach(S.history_events, history_event),
+                        class_name="space-y-3",
+                    ),
+                    rx.el.p(
+                        "لا توجد أحداث محفوظة لهذه المعاملة القديمة. التعديلات السابقة غير متاحة.",
+                        class_name="text-sm leading-7 text-[#7c8178]",
+                    ),
+                ),
+                role="dialog",
+                aria_modal=True,
+                aria_label="سجل تعديلات المعاملة",
+                class_name="max-h-[90dvh] w-full max-w-xl overflow-y-auto rounded-2xl bg-[#fffdf8] p-5 md:p-7",
+            ),
+            class_name="fixed inset-0 z-50 flex items-center justify-center bg-[#243747]/40 p-4",
         ),
     )
 

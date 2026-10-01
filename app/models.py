@@ -614,6 +614,72 @@ class Transaction(Record, Base):
     )
 
 
+class TransactionAuditEvent(Record, Base):
+    __tablename__ = "mh_transaction_audit_events"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["household_id", "transaction_id"],
+            ["mh_transactions.household_id", "mh_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "actor_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "action IN ('created', 'updated', 'deleted', 'auto_created')",
+            name="action",
+        ),
+        CheckConstraint(
+            "(action = 'auto_created' AND actor_user_id IS NULL) OR "
+            "(action <> 'auto_created' AND actor_user_id IS NOT NULL)",
+            name="actor_for_action",
+        ),
+        CheckConstraint(
+            "json_typeof(before_data) = 'object' AND "
+            "json_typeof(after_data) = 'object'",
+            name="snapshot_objects",
+        ),
+        CheckConstraint(
+            "(before_data::jsonb - ARRAY['account_id', 'category_id', 'kind', "
+            "'amount', 'transaction_date', 'description']) = '{}'::jsonb AND "
+            "(after_data::jsonb - ARRAY['account_id', 'category_id', 'kind', "
+            "'amount', 'transaction_date', 'description']) = '{}'::jsonb",
+            name="snapshot_fields",
+        ),
+        CheckConstraint(
+            "json_typeof(changed_fields) = 'array' AND "
+            'changed_fields::jsonb <@ \'["account_id", "category_id", '
+            '"kind", "amount", "transaction_date", '
+            '"description"]\'::jsonb',
+            name="changed_fields_allowed",
+        ),
+        Index(
+            "ix_mh_transaction_audit_events_history",
+            "household_id",
+            "transaction_id",
+            "created_at",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    transaction_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    actor_user_id: Mapped[UUID | None] = mapped_column(Uuid, default=None)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    before_data: Mapped[dict[str, str]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'::json"), nullable=False
+    )
+    after_data: Mapped[dict[str, str]] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'::json"), nullable=False
+    )
+    changed_fields: Mapped[list[str]] = mapped_column(
+        JSON, default=list, server_default=text("'[]'::json"), nullable=False
+    )
+
+
 class SavingsGoal(Record, Base):
     __tablename__ = "mh_savings_goals"
     __table_args__ = (

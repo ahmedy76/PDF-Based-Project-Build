@@ -125,6 +125,7 @@ class MoneyRulesTests(unittest.TestCase):
             ),
         ]
         db = Mock()
+        db.execute.return_value.all.return_value = []
         db.get.return_value = SimpleNamespace(name="البيت", currency="SAR")
         result_sets = [
             [SimpleNamespace(id=hid, name="البيت")],
@@ -368,6 +369,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
         january = budget(2026, 1)
         rows = [december, january] if current_budget else [december]
         db = Mock()
+        db.execute.return_value.all.return_value = []
         db.get.return_value = SimpleNamespace(name="البيت", currency="SAR")
         db.scalars.side_effect = [
             Mock(all=Mock(return_value=items))

@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 from uuid import uuid4
 
 import bcrypt
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app import models as m
@@ -166,6 +166,7 @@ class ReportAggregationTests(unittest.TestCase):
             alert_threshold_percent=80,
         )
         db = Mock()
+        db.execute.return_value.all.return_value = []
         db.get.return_value = SimpleNamespace(name="البيت", currency="SAR")
         db.scalars.side_effect = [
             Mock(all=Mock(return_value=rows))
@@ -702,6 +703,22 @@ class ManagedDatabaseReportTests(unittest.TestCase):
                 SimpleNamespace(household_id=household.id, role="owner"),
             )
         self.assertEqual(len(state.transactions), 2)
+        events = db.scalars(
+            select(m.TransactionAuditEvent).where(
+                m.TransactionAuditEvent.household_id == household.id
+            )
+        ).all()
+        self.assertEqual(len(events), 2)
+        self.assertTrue(
+            all(
+                e.action == "auto_created" and e.actor_user_id is None
+                for e in events
+            )
+        )
+        self.assertTrue(
+            all(e.after_data["amount"] == "10.0000" for e in events)
+        )
+        self.assertEqual(state.transactions[0]["metadata"], "سُجّلت آليًا")
         self.assertEqual(state.expense, "20.00")
         self.assertEqual(
             state.report_range_label, "من 2026-03-01 إلى 2026-03-15"

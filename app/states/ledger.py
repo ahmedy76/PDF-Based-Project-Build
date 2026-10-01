@@ -7,7 +7,7 @@ import secrets
 from contextlib import suppress
 from datetime import date, timedelta
 from decimal import Decimal
-from typing import Any
+from typing import Any, TypedDict
 from uuid import UUID
 
 import reflex_xy
@@ -39,6 +39,20 @@ def next_recurring_date(
     raise ValueError("تكرار غير صالح.")
 
 
+class HistoryChange(TypedDict):
+    field: str
+    before: str
+    after: str
+
+
+class HistoryEntry(TypedDict):
+    id: str
+    action: str
+    actor: str
+    date: str
+    changes: list[HistoryChange]
+
+
 class LedgerState(rx.State):
     ready: bool = False
     message: str = ""
@@ -55,6 +69,10 @@ class LedgerState(rx.State):
     categories: list[dict[str, str]] = []
     archived_categories: list[dict[str, str]] = []
     transactions: list[dict[str, str]] = []
+    history_id: str = ""
+    history_title: str = ""
+    history_legacy: str = ""
+    history_events: list[HistoryEntry] = []
     recurring_rules: list[dict[str, str]] = []
     budgets: list[dict[str, str]] = []
     dashboard_budgets: list[dict[str, str]] = []
@@ -179,12 +197,14 @@ class LedgerState(rx.State):
 
     @rx.var
     def transaction_category_options(self) -> list[dict[str, str]]:
+        active = [c for c in self.categories if c["kind"] == self.draft["kind"]]
         if not self.editing_archived_category:
-            return self.categories
-        return self.categories + [
+            return active
+        return active + [
             {**c, "name": f"{c['name']} (مؤرشفة · لهذه المعاملة فقط)"}
             for c in self.archived_categories
             if c["id"] == self.draft["category_id"]
+            and c["kind"] == self.draft["kind"]
         ]
 
     @rx.var
@@ -200,6 +220,105 @@ class LedgerState(rx.State):
             raise ValueError(
                 "لا يمكن استخدام فئة مؤرشفة لمعاملة جديدة أو نقل معاملة إليها."
             )
+
+    @staticmethod
+    def _transaction_snapshot(record) -> dict[str, str]:
+        return {
+            "account_id": str(record.account_id),
+            "category_id": str(record.category_id),
+            "kind": record.kind,
+            "amount": str(record.amount.quantize(Decimal("0.0001"))),
+            "transaction_date": record.transaction_date.isoformat(),
+            "description": record.description,
+        }
+
+    def _append_transaction_event(
+        self,
+        db,
+        record,
+        action: str,
+        actor_id,
+        before: dict[str, str] | None = None,
+    ) -> bool:
+        previous = before or {}
+        after = (
+            {} if action == "deleted" else self._transaction_snapshot(record)
+        )
+        changed = [
+            k
+            for k in self._transaction_snapshot(record)
+            if previous.get(k) != after.get(k)
+        ]
+        if action == "updated" and not changed:
+            return False
+        db.add(
+            m.TransactionAuditEvent(
+                household_id=record.household_id,
+                transaction_id=record.id,
+                actor_user_id=actor_id,
+                action=action,
+                before_data=previous,
+                after_data=after,
+                changed_fields=changed,
+            )
+        )
+        return True
+
+    @staticmethod
+    def _history_value(
+        field: str,
+        value: str,
+        accounts: dict[str, str],
+        categories: dict[str, str],
+    ) -> str:
+        if not value:
+            return "—"
+        if field == "account_id":
+            return accounts.get(value, "حساب سابق")
+        if field == "category_id":
+            return categories.get(value, "فئة سابقة")
+        if field == "kind":
+            return {"income": "دخل", "expense": "مصروف"}.get(value, value)
+        return value
+
+    def _history_rows(self, events, names, accounts, categories):
+        labels = {
+            "account_id": "الحساب",
+            "category_id": "الفئة",
+            "kind": "النوع",
+            "amount": "المبلغ",
+            "transaction_date": "التاريخ",
+            "description": "الوصف",
+        }
+        return [
+            {
+                "id": str(e.id),
+                "action": {
+                    "created": "إضافة يدوية",
+                    "updated": "تعديل",
+                    "deleted": "حذف",
+                    "auto_created": "إنشاء آلي",
+                }.get(e.action, "تغيير"),
+                "actor": "إنشاء آلي"
+                if e.action == "auto_created"
+                else names.get(e.actor_user_id, "عضو سابق"),
+                "date": e.created_at.strftime("%Y-%m-%d %H:%M"),
+                "changes": [
+                    {
+                        "field": labels[k],
+                        "before": self._history_value(
+                            k, e.before_data.get(k, ""), accounts, categories
+                        ),
+                        "after": self._history_value(
+                            k, e.after_data.get(k, ""), accounts, categories
+                        ),
+                    }
+                    for k in e.changed_fields
+                    if k in labels
+                ],
+            }
+            for e in events
+        ]
 
     def _account_balances(self, accounts, txs):
         balances = {a.id: a.opening_balance for a in accounts}
@@ -437,19 +556,22 @@ class LedgerState(rx.State):
                     )
                 )
                 if not exists:
-                    db.add(
-                        m.Transaction(
-                            household_id=household_id,
-                            created_by_user_id=rule.created_by_user_id,
-                            account_id=rule.account_id,
-                            category_id=rule.category_id,
-                            kind=rule.kind,
-                            amount=rule.amount,
-                            description=rule.description,
-                            transaction_date=scheduled,
-                            recurring_rule_id=rule.id,
-                            scheduled_for=scheduled,
-                        )
+                    transaction = m.Transaction(
+                        household_id=household_id,
+                        created_by_user_id=rule.created_by_user_id,
+                        account_id=rule.account_id,
+                        category_id=rule.category_id,
+                        kind=rule.kind,
+                        amount=rule.amount,
+                        description=rule.description,
+                        transaction_date=scheduled,
+                        recurring_rule_id=rule.id,
+                        scheduled_for=scheduled,
+                    )
+                    db.add(transaction)
+                    db.flush()
+                    self._append_transaction_event(
+                        db, transaction, "auto_created", None
                     )
                     posted += 1
                 following = next_recurring_date(
@@ -564,6 +686,74 @@ class LedgerState(rx.State):
                 m.Transaction.created_at.desc(),
             )
         ).all()
+        audit_rows = (
+            db.execute(
+                select(m.TransactionAuditEvent, m.User.display_name)
+                .outerjoin(
+                    m.HouseholdMembership,
+                    (
+                        m.HouseholdMembership.household_id
+                        == m.TransactionAuditEvent.household_id
+                    )
+                    & (
+                        m.HouseholdMembership.user_id
+                        == m.TransactionAuditEvent.actor_user_id
+                    ),
+                )
+                .outerjoin(m.User, m.User.id == m.HouseholdMembership.user_id)
+                .where(
+                    m.TransactionAuditEvent.household_id == hid,
+                    m.TransactionAuditEvent.transaction_id.in_(
+                        [t.id for t in txs]
+                    ),
+                )
+                .order_by(
+                    m.TransactionAuditEvent.created_at,
+                    m.TransactionAuditEvent.id,
+                )
+            ).all()
+            if txs
+            else []
+        )
+        audit = {}
+        for event, actor_name in audit_rows:
+            entry = audit.setdefault(
+                event.transaction_id, {"origin": "", "editor": ""}
+            )
+            if event.action == "auto_created":
+                entry["origin"] = "سُجّلت آليًا"
+            elif event.action == "created":
+                entry["origin"] = (
+                    f"أضافها {actor_name or 'عضو سابق'} · {event.created_at:%Y-%m-%d %H:%M}"
+                )
+            elif event.action == "updated":
+                entry["editor"] = (
+                    f"آخر تعديل {actor_name or 'عضو سابق'} · {event.created_at:%Y-%m-%d %H:%M}"
+                )
+        audited_origins = {
+            e.transaction_id
+            for e, _ in audit_rows
+            if e.action in ("created", "auto_created")
+        }
+        creator_names = (
+            dict(
+                db.execute(
+                    select(m.HouseholdMembership.user_id, m.User.display_name)
+                    .join(m.User, m.User.id == m.HouseholdMembership.user_id)
+                    .where(
+                        m.HouseholdMembership.household_id == hid,
+                        m.HouseholdMembership.user_id.in_(
+                            [
+                                getattr(t, "created_by_user_id", None)
+                                for t in txs
+                            ]
+                        ),
+                    )
+                ).all()
+            )
+            if txs
+            else {}
+        )
         balances = self._account_balances(accounts, txs)
         account_rows = [
             {
@@ -607,11 +797,30 @@ class LedgerState(rx.State):
                 "category_id": str(t.category_id),
                 "category": category_names.get(t.category_id, ""),
                 "transaction_date": t.transaction_date.isoformat(),
+                "entry_created_at": t.created_at.isoformat()
+                if getattr(t, "created_at", None)
+                else t.transaction_date.isoformat(),
                 "recurring_rule_id": str(
                     getattr(t, "recurring_rule_id", None) or ""
                 ),
                 "scheduled_for": getattr(t, "scheduled_for", None).isoformat()
                 if getattr(t, "scheduled_for", None)
+                else "",
+                "metadata": audit.get(t.id, {}).get("origin")
+                or (
+                    (
+                        f"سُجّلت آليًا · {t.created_at:%Y-%m-%d %H:%M}"
+                        if getattr(t, "created_at", None)
+                        else "سُجّلت آليًا"
+                    )
+                    if getattr(t, "recurring_rule_id", None)
+                    else f"أضافها {creator_names.get(getattr(t, 'created_by_user_id', None), 'عضو سابق')} · {t.created_at:%Y-%m-%d %H:%M}"
+                    if getattr(t, "created_at", None)
+                    else "إضافة سابقة"
+                ),
+                "editor_metadata": audit.get(t.id, {}).get("editor", ""),
+                "legacy_metadata": "التعديلات السابقة غير متاحة"
+                if t.id not in audited_origins
                 else "",
             }
             for t in txs
@@ -784,6 +993,10 @@ class LedgerState(rx.State):
     async def load(self):
         self.ready = False
         self.editor = ""
+        self.history_id = ""
+        self.history_events = []
+        self.history_title = ""
+        self.history_legacy = ""
         try:
             auth = await self.get_state(AuthState)
             success = False
@@ -815,6 +1028,12 @@ class LedgerState(rx.State):
         auth = await self.get_state(AuthState)
         auth.selected_household = str(data.get("household", ""))
         self.invite_link = ""
+        self.history_id = ""
+        self.history_events = []
+        self.transactions = []
+        self.accounts = []
+        self.categories = []
+        self.ready = False
         yield LedgerState.load
 
     @rx.event
@@ -871,6 +1090,9 @@ class LedgerState(rx.State):
 
     @rx.event
     def open_editor(self, kind: str, record_id: str = ""):
+        self._prepare_editor(kind, record_id)
+
+    def _prepare_editor(self, kind: str, record_id: str = ""):
         self.message = ""
         self.editor, self.edit_id = kind, record_id
         today = date.today().isoformat()
@@ -901,6 +1123,218 @@ class LedgerState(rx.State):
         for key in self.draft:
             if key in record:
                 self.draft[key] = record[key]
+        if kind == "transaction" and not record_id:
+            account_ids = {a["id"] for a in self.accounts}
+            category_ids = {
+                c["id"] for c in self.categories if c["kind"] == "expense"
+            }
+            recent = sorted(
+                self.transactions,
+                key=lambda t: t.get("entry_created_at", t["transaction_date"]),
+                reverse=True,
+            )
+            account_id = next(
+                (
+                    t["account_id"]
+                    for t in recent
+                    if t["account_id"] in account_ids
+                ),
+                "",
+            )
+            category_id = next(
+                (
+                    t["category_id"]
+                    for t in recent
+                    if t["kind"] == "expense"
+                    and t["category_id"] in category_ids
+                ),
+                "",
+            )
+            self.draft = {
+                **self.draft,
+                "account_id": account_id
+                if account_id in account_ids
+                else (self.accounts[0]["id"] if self.accounts else ""),
+                "category_id": category_id
+                if category_id in category_ids
+                else (
+                    next(
+                        (
+                            c["id"]
+                            for c in self.categories
+                            if c["kind"] == "expense"
+                        ),
+                        "",
+                    )
+                ),
+            }
+
+    @rx.event
+    def change_transaction_kind(self, value: str):
+        if value not in ("expense", "income") or self.editor != "transaction":
+            return
+        choices = [c["id"] for c in self.categories if c["kind"] == value]
+        current = self.draft["category_id"]
+        if self.edit_id and any(
+            c["id"] == current and c["kind"] == value
+            for c in self.archived_categories
+        ):
+            choices.append(current)
+        self.draft = {
+            **self.draft,
+            "kind": value,
+            "category_id": current
+            if current in choices
+            else (choices[0] if choices else ""),
+        }
+
+    @rx.event
+    def change_transaction_category(self, value: str):
+        if self.editor == "transaction" and value in {
+            c["id"] for c in self.transaction_category_options
+        }:
+            self.draft = {**self.draft, "category_id": value}
+
+    @rx.event
+    def reuse_transaction(self, record_id: str):
+        source = next(
+            (t for t in self.transactions if t["id"] == record_id), None
+        )
+        if source is None:
+            self.message = "المعاملة غير متاحة. حدّث الدفتر."
+            return
+        self._prepare_editor("transaction")
+        choices = [
+            c["id"] for c in self.categories if c["kind"] == source["kind"]
+        ]
+        self.draft = {
+            **self.draft,
+            "kind": source["kind"],
+            "account_id": source["account_id"]
+            if source["account_id"] in {a["id"] for a in self.accounts}
+            else self.draft["account_id"],
+            "category_id": source["category_id"]
+            if source["category_id"] in choices
+            else (choices[0] if choices else ""),
+            "description": source["description"],
+            "amount": "",
+        }
+
+    @rx.event
+    async def show_transaction_history(self, record_id: str):
+        self.history_id = ""
+        self.history_events = []
+        self.history_legacy = ""
+        try:
+            auth = await self.get_state(AuthState)
+
+            def history_sync(db):
+                user, member = auth._household(db)
+                hid = member.household_id
+                transaction = db.scalar(
+                    select(m.Transaction).where(
+                        m.Transaction.id == UUID(record_id),
+                        m.Transaction.household_id == hid,
+                        m.Transaction.deleted_at.is_(None),
+                    )
+                )
+                if transaction is None:
+                    raise ValueError("المعاملة غير متاحة لهذه الأسرة.")
+                events = db.scalars(
+                    select(m.TransactionAuditEvent)
+                    .where(
+                        m.TransactionAuditEvent.household_id == hid,
+                        m.TransactionAuditEvent.transaction_id
+                        == transaction.id,
+                    )
+                    .order_by(
+                        m.TransactionAuditEvent.created_at.desc(),
+                        m.TransactionAuditEvent.id.desc(),
+                    )
+                ).all()
+                names = dict(
+                    db.execute(
+                        select(
+                            m.HouseholdMembership.user_id, m.User.display_name
+                        )
+                        .join(
+                            m.User, m.User.id == m.HouseholdMembership.user_id
+                        )
+                        .where(
+                            m.HouseholdMembership.household_id == hid,
+                            m.HouseholdMembership.user_id.in_(
+                                [
+                                    e.actor_user_id
+                                    for e in events
+                                    if e.actor_user_id
+                                ]
+                                + [transaction.created_by_user_id]
+                            ),
+                        )
+                    ).all()
+                )
+                accounts = dict(
+                    db.execute(
+                        select(
+                            m.FinancialAccount.id, m.FinancialAccount.name
+                        ).where(m.FinancialAccount.household_id == hid)
+                    ).all()
+                )
+                categories = dict(
+                    db.execute(
+                        select(m.Category.id, m.Category.name).where(
+                            m.Category.household_id == hid
+                        )
+                    ).all()
+                )
+                legacy = (
+                    ""
+                    if any(
+                        e.action in ("created", "auto_created") for e in events
+                    )
+                    else (
+                        "التعديلات السابقة غير متاحة. "
+                        f"سُجّلت آليًا · {transaction.created_at:%Y-%m-%d %H:%M}"
+                        if transaction.recurring_rule_id
+                        else "التعديلات السابقة غير متاحة. "
+                        f"أضافها {names.get(transaction.created_by_user_id, 'عضو سابق')} · {transaction.created_at:%Y-%m-%d %H:%M}"
+                    )
+                )
+                return (
+                    transaction.description
+                    or categories.get(transaction.category_id, "معاملة"),
+                    legacy,
+                    self._history_rows(
+                        events,
+                        names,
+                        {str(k): v for k, v in accounts.items()},
+                        {str(k): v for k, v in categories.items()},
+                    ),
+                )
+
+            async with rx.asession() as db:
+                title, legacy, events = await db.run_sync(history_sync)
+            self.history_title, self.history_legacy = title, legacy
+            self.history_events = events
+            self.history_id = record_id
+        except PermissionError:
+            logging.exception("Unexpected error")
+            self.message = ""
+            return rx.redirect("/login")
+        except (ValueError, TypeError) as e:
+            self.message = (
+                str(e) if isinstance(e, ValueError) else "معرّف معاملة غير صالح."
+            )
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            self.message = "تعذر عرض سجل التعديلات."
+
+    @rx.event
+    def close_transaction_history(self):
+        self.history_id = ""
+        self.history_title = ""
+        self.history_events = []
+        self.history_legacy = ""
 
     @rx.event
     def close_editor(self):
@@ -1022,6 +1456,11 @@ class LedgerState(rx.State):
                         raise ValueError(
                             "التاريخ يجب أن يكون بين افتتاح الحساب واليوم."
                         )
+                    before = (
+                        self._transaction_snapshot(record)
+                        if record is not None
+                        else None
+                    )
                     if record is None:
                         record = m.Transaction(
                             household_id=hid, created_by_user_id=user.id
@@ -1040,22 +1479,30 @@ class LedgerState(rx.State):
                     ).strip()[:2000]
                     sync_db.add(record)
                     sync_db.flush()
-                    for other in sync_db.scalars(
-                        select(m.HouseholdMembership).where(
-                            m.HouseholdMembership.household_id == hid,
-                            m.HouseholdMembership.status == "active",
-                            m.HouseholdMembership.user_id != user.id,
-                        )
-                    ).all():
-                        self._notify(
-                            sync_db,
-                            hid,
-                            other.user_id,
-                            "partner_transaction",
-                            "حدّث شريكك دفتر المعاملات",
-                            transaction_id=record.id,
-                        )
-                    self._budget_alerts(sync_db, hid)
+                    changed = self._append_transaction_event(
+                        sync_db,
+                        record,
+                        "updated" if before is not None else "created",
+                        user.id,
+                        before,
+                    )
+                    if changed:
+                        for other in sync_db.scalars(
+                            select(m.HouseholdMembership).where(
+                                m.HouseholdMembership.household_id == hid,
+                                m.HouseholdMembership.status == "active",
+                                m.HouseholdMembership.user_id != user.id,
+                            )
+                        ).all():
+                            self._notify(
+                                sync_db,
+                                hid,
+                                other.user_id,
+                                "partner_transaction",
+                                "حدّث شريكك دفتر المعاملات",
+                                transaction_id=record.id,
+                            )
+                        self._budget_alerts(sync_db, hid)
                 elif self.editor == "recurring":
                     account = self._record(
                         sync_db,
@@ -1341,9 +1788,16 @@ class LedgerState(rx.State):
                         raise ValueError("الحساب مغلق بالفعل.")
                     record.is_archived = True
                 elif self.delete_kind == "transaction":
-                    self._record(
+                    record = self._record(
                         sync_db, m.Transaction, self.delete_id, hid
-                    ).deleted_at = now()
+                    )
+                    if record.deleted_at is not None:
+                        raise ValueError("المعاملة محذوفة بالفعل.")
+                    before = self._transaction_snapshot(record)
+                    record.deleted_at = now()
+                    self._append_transaction_event(
+                        sync_db, record, "deleted", user.id, before
+                    )
                 elif self.delete_kind == "budget":
                     record = self._record(
                         sync_db, m.MonthlyCategoryBudget, self.delete_id, hid
