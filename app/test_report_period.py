@@ -129,6 +129,7 @@ class ReportAggregationTests(unittest.TestCase):
             id=account_id,
             name="محفظة",
             account_type="cash",
+            currency="SAR",
             opening_balance=Decimal("0"),
             opening_date=date(2025, 1, 1),
             is_archived=False,
@@ -162,6 +163,7 @@ class ReportAggregationTests(unittest.TestCase):
             category_id=active_id,
             year=2026,
             month=3,
+            currency="SAR",
             amount=Decimal("100"),
             alert_threshold_percent=80,
         )

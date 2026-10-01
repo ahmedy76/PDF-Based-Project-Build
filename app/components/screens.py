@@ -3,6 +3,7 @@ import reflex_xy
 
 from app.states.auth import AuthState
 from app.components.landing import landing_content
+from app.components.member_access import member_access_panel
 from app.states.categories import CategoryState as C
 from app.states.ledger import LedgerState as S
 from app.states.goals import GoalRow, GoalState as G
@@ -23,6 +24,7 @@ from app.components.ui import (
     edit_actions,
     transaction_row,
     budget_card,
+    currency_switcher,
 )
 
 
@@ -220,7 +222,7 @@ def harmony_ring() -> rx.Component:
                             "صافي التوفير", class_name="text-xs text-[#7c8178]"
                         ),
                         rx.el.strong(
-                            S.saving,
+                            f"{S.saving} {S.view_currency}",
                             class_name="mt-2 text-3xl font-bold tabular-nums text-[#62704b]",
                         ),
                         rx.el.span(
@@ -236,8 +238,14 @@ def harmony_ring() -> rx.Component:
             class_name="flex justify-center py-7",
         ),
         rx.el.div(
-            rx.el.p(f"الدخل  {S.income}", class_name="text-[#62704b]"),
-            rx.el.p(f"المصروف  {S.expense}", class_name="text-[#a27456]"),
+            rx.el.p(
+                f"الدخل  {S.income} {S.view_currency}",
+                class_name="text-[#62704b]",
+            ),
+            rx.el.p(
+                f"المصروف  {S.expense} {S.view_currency}",
+                class_name="text-[#a27456]",
+            ),
             class_name="flex flex-wrap justify-between gap-3 border-t border-[#e7e2d7] pt-4 text-sm font-semibold tabular-nums",
         ),
         rx.el.p(
@@ -256,11 +264,14 @@ def dashboard() -> rx.Component:
                     f"أهلًا {AuthState.name}،",
                     "لنلقِ نظرة هادئة على أموال البيت هذا الشهر.",
                 ),
-                rx.el.button(
-                    rx.icon("plus", class_name="h-4 w-4"),
-                    "تسجيل معاملة",
-                    on_click=lambda: S.open_editor("transaction"),
-                    class_name=BUTTON,
+                rx.cond(
+                    S.can_add_transactions,
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        "تسجيل معاملة",
+                        on_click=lambda: S.open_editor("transaction"),
+                        class_name=BUTTON,
+                    ),
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
             ),
@@ -273,6 +284,7 @@ def dashboard() -> rx.Component:
                     class_name="mb-6 flex items-center gap-3 rounded-xl border border-[#dfd4b9] bg-[#f4eddb] p-4 text-sm text-[#91713d]",
                 ),
             ),
+            currency_switcher(),
             rx.el.div(
                 metric("رصيد الحسابات النشطة", S.total, "wallet"),
                 metric("دخل الشهر", S.income, "arrow-down-left"),
@@ -283,7 +295,7 @@ def dashboard() -> rx.Component:
             rx.cond(
                 S.has_archived_balance,
                 rx.el.p(
-                    f"أرصدة الحسابات المغلقة المسجّلة ({S.archived_total} {S.currency}) مفصولة عن رصيد الحسابات النشطة؛ لم تُنقل أو تختفِ الأموال بسبب الإغلاق.",
+                    f"أرصدة الحسابات المغلقة المسجّلة ({S.archived_total} {S.view_currency}) مفصولة عن رصيد الحسابات النشطة؛ لم تُنقل أو تختفِ الأموال بسبب الإغلاق.",
                     class_name="mb-6 rounded-xl border border-[#e2ded2] bg-[#fffdf8] px-4 py-3 text-sm leading-7 text-[#62704b]",
                 ),
             ),
@@ -369,7 +381,7 @@ def active_account_card(a: dict[str, str]) -> rx.Component:
         rx.el.h3(a["name"], class_name="text-xl font-bold"),
         rx.el.div(
             rx.el.strong(a["balance"], class_name="text-3xl tabular-nums"),
-            rx.el.span(S.currency, class_name="text-sm text-[#7c8178]"),
+            rx.el.span(a["currency"], class_name="text-sm text-[#7c8178]"),
             class_name="my-5 flex items-baseline gap-2",
         ),
         rx.el.div(
@@ -395,7 +407,7 @@ def archived_account_card(a: dict[str, str]) -> rx.Component:
         rx.el.p("الرصيد المسجّل", class_name="mt-4 text-xs text-[#7c8178]"),
         rx.el.div(
             rx.el.strong(a["balance"], class_name="text-2xl tabular-nums"),
-            rx.el.span(S.currency, class_name="text-sm text-[#7c8178]"),
+            rx.el.span(a["currency"], class_name="text-sm text-[#7c8178]"),
             class_name="mt-1 flex items-baseline gap-2",
         ),
         class_name="rounded-2xl border border-[#e2ded2] bg-[#f1f0e9] p-5 md:p-7",
@@ -443,7 +455,7 @@ def accounts() -> rx.Component:
                     rx.cond(
                         S.archived_accounts.length() > 0,
                         rx.el.span(
-                            f"مجموع الأرصدة المسجّلة: {S.archived_total} {S.currency}",
+                            "الأرصدة المغلقة بعملاتها مبينة لكل حساب؛ لا تُجمع العملات المختلفة.",
                             class_name="text-sm text-[#7c8178]",
                         ),
                     ),
@@ -487,7 +499,7 @@ def recurring_card(row) -> rx.Component:
             class_name="flex items-start justify-between gap-3",
         ),
         rx.el.p(
-            f"{row['display_amount']} {S.currency} · {row['frequency_label']}",
+            f"{row['display_amount']} {row['currency']} · {row['frequency_label']}",
             class_name="mt-4 font-bold tabular-nums text-[#27394a]",
         ),
         rx.el.p(
@@ -502,16 +514,22 @@ def recurring_card(row) -> rx.Component:
             ),
         ),
         rx.el.div(
-            rx.el.button(
-                rx.icon("pencil", class_name="h-4 w-4"),
-                "تعديل",
-                on_click=lambda: S.open_editor("recurring", row["id"]),
-                class_name=SECONDARY,
+            rx.cond(
+                S.can_add_transactions,
+                rx.el.button(
+                    rx.icon("pencil", class_name="h-4 w-4"),
+                    "تعديل",
+                    on_click=lambda: S.open_editor("recurring", row["id"]),
+                    class_name=SECONDARY,
+                ),
             ),
-            rx.el.button(
-                rx.cond(row["active"] == "yes", "إيقاف مؤقت", "استئناف"),
-                on_click=lambda: S.toggle_recurring(row["id"]),
-                class_name=SECONDARY,
+            rx.cond(
+                S.can_add_transactions,
+                rx.el.button(
+                    rx.cond(row["active"] == "yes", "إيقاف مؤقت", "استئناف"),
+                    on_click=lambda: S.toggle_recurring(row["id"]),
+                    class_name=SECONDARY,
+                ),
             ),
             class_name="mt-5 flex flex-wrap gap-2 border-t border-[#eeebe2] pt-4",
         ),
@@ -527,11 +545,14 @@ def transactions() -> rx.Component:
                 section_title(
                     "دفتر المعاملات", "التفاصيل الصغيرة تصنع الصورة الكاملة."
                 ),
-                rx.el.button(
-                    rx.icon("plus", class_name="h-4 w-4"),
-                    "معاملة جديدة",
-                    on_click=lambda: S.open_editor("transaction"),
-                    class_name=BUTTON,
+                rx.cond(
+                    S.can_add_transactions,
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        "معاملة جديدة",
+                        on_click=lambda: S.open_editor("transaction"),
+                        class_name=BUTTON,
+                    ),
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
             ),
@@ -626,11 +647,14 @@ def transactions() -> rx.Component:
                             class_name="mt-1 text-sm text-[#7c8178]",
                         ),
                     ),
-                    rx.el.button(
-                        rx.icon("plus", class_name="h-4 w-4"),
-                        "معاملة متكررة جديدة",
-                        on_click=lambda: S.open_editor("recurring"),
-                        class_name=BUTTON,
+                    rx.cond(
+                        S.can_add_transactions,
+                        rx.el.button(
+                            rx.icon("plus", class_name="h-4 w-4"),
+                            "معاملة متكررة جديدة",
+                            on_click=lambda: S.open_editor("recurring"),
+                            class_name=BUTTON,
+                        ),
                     ),
                     class_name="mb-5 flex flex-wrap items-center justify-between gap-4",
                 ),
@@ -928,7 +952,7 @@ def goals() -> rx.Component:
             rx.el.div(
                 rx.icon("info", class_name="h-5 w-5 shrink-0"),
                 rx.el.p(
-                    "هذه مبالغ تُخصّص يدويًا للمتابعة فقط، وليست إيداعات أو تحويلات؛ لا تتغير أرصدة الحسابات أو التدفقات النقدية أو أرقام الدخل والمصروف."
+                    f"هذه المبالغ مقومة بعملة الأسرة الأساسية {S.currency} وتُخصّص يدويًا للمتابعة فقط، وليست إيداعات أو تحويلات؛ لا تتغير أرصدة الحسابات أو التدفقات النقدية أو أرقام الدخل والمصروف."
                 ),
                 class_name="mb-6 flex gap-3 rounded-xl border border-[#dce0ce] bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
             ),
@@ -1370,7 +1394,7 @@ def debts() -> rx.Component:
             rx.el.div(
                 rx.icon("info", class_name="h-5 w-5 shrink-0"),
                 rx.el.p(
-                    "هذا سجل يدوي فقط: لا نرسل تذكيرات تلقائية ولا ننشئ معاملات أو نغيّر الأرصدة والتدفقات. عند دفع أو قبض مبلغ فعلي سجّله منفصلًا في دفتر المعاملات، ولا تسجله مرتين."
+                    f"الديون والأقساط مقومة بعملة الأسرة الأساسية {S.currency} فقط. هذا سجل يدوي: لا ننشئ معاملات أو نغيّر الأرصدة والتدفقات. سجّل الدفع أو القبض الفعلي منفصلًا في دفتر المعاملات دون تكرار."
                 ),
                 class_name="mb-6 flex gap-3 rounded-xl border border-[#dce0ce] bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
             ),
@@ -1502,13 +1526,21 @@ def budgets() -> rx.Component:
                     "مساحة لكل احتياج",
                     "ميزانيات شهرية مرنة، وخطوات أقرب إلى التوازن.",
                 ),
-                rx.el.button(
-                    rx.icon("plus", class_name="h-4 w-4"),
-                    "ميزانية جديدة",
-                    on_click=lambda: S.open_editor("budget"),
-                    class_name=BUTTON,
+                rx.cond(
+                    S.can_edit_budgets,
+                    rx.el.button(
+                        rx.icon("plus", class_name="h-4 w-4"),
+                        "ميزانية جديدة",
+                        on_click=lambda: S.open_editor("budget"),
+                        class_name=BUTTON,
+                    ),
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
+            ),
+            currency_switcher(),
+            rx.el.p(
+                f"الميزانيات المعروضة بعملة {S.view_currency} فقط؛ يُحتسب إنفاق الحسابات بهذه العملة دون تحويل.",
+                class_name="mb-4 text-sm text-[#62704b]",
             ),
             rx.el.form(
                 field("شهر الميزانية", "month", "month", S.budget_month),
@@ -1537,6 +1569,7 @@ def reports() -> rx.Component:
                 "الصورة الأوضح",
                 "تأمل عادات البيت المالية، وخطط للشهر القادم بثقة.",
             ),
+            currency_switcher(),
             rx.el.div(
                 rx.el.button(
                     "الشهر الحالي",
@@ -1645,7 +1678,7 @@ def reports() -> rx.Component:
                 class_name="grid w-full min-w-0 gap-6 xl:grid-cols-2",
             ),
             rx.el.p(
-                "البيانات من المعاملات المسجلة فقط، بالعملة الموحدة للأسرة. الفترة الحالية تمتد حتى اليوم؛ الأصفار تعني عدم وجود حركة.",
+                f"البيانات من المعاملات المسجلة بعملة {S.view_currency} فقط دون تحويل عملات. الفترة الحالية تمتد حتى اليوم؛ الأصفار تعني عدم وجود حركة.",
                 class_name="mt-5 text-sm leading-7 text-[#7c8178]",
             ),
         )
@@ -1666,6 +1699,13 @@ def notifications() -> rx.Component:
                     class_name=SECONDARY,
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-3",
+            ),
+            rx.cond(
+                S.budget_alert_note != "",
+                rx.el.p(
+                    S.budget_alert_note,
+                    class_name="my-3 text-sm text-[#62704b]",
+                ),
             ),
             rx.cond(
                 S.notifications.length() > 0,
@@ -2003,6 +2043,7 @@ def settings() -> rx.Component:
                         ),
                         class_name=CARD,
                     ),
+                    member_access_panel(),
                     rx.el.section(
                         rx.el.h2(
                             "إشعارات داخل التطبيق",

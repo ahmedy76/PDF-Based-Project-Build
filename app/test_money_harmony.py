@@ -79,6 +79,7 @@ class MoneyRulesTests(unittest.TestCase):
             id=active_id,
             name="محفظة",
             account_type="cash",
+            currency="SAR",
             opening_balance=Decimal("100.00"),
             opening_date=today,
             is_archived=False,
@@ -87,6 +88,7 @@ class MoneyRulesTests(unittest.TestCase):
             id=closed_id,
             name="حساب قديم",
             account_type="bank",
+            currency="SAR",
             opening_balance=Decimal("30.00"),
             opening_date=today,
             is_archived=True,
@@ -339,6 +341,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
             id=account_id,
             name="محفظة",
             account_type="cash",
+            currency="SAR",
             opening_balance=Decimal("200.00"),
             opening_date=date(2025, 1, 1),
             is_archived=False,
@@ -361,6 +364,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
                 category_id=category_id,
                 year=year,
                 month=month,
+                currency="SAR",
                 amount=Decimal("100.00"),
                 alert_threshold_percent=80,
             )
@@ -444,6 +448,7 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_change_month_and_budget_editor_keep_chosen_period(self):
         state = LedgerState()
+        state.budget_month = ""
         db, _, january = self.load_months(state)
         self.assertEqual(state.budget_month, "2026-01")
         self.assertEqual([b["id"] for b in state.budgets], [str(january.id)])
@@ -486,11 +491,14 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
             id=category_id, kind="expense", is_archived=False
         )
         user = SimpleNamespace(id=uuid4())
-        member = SimpleNamespace(household_id=uuid4())
+        member = SimpleNamespace(household_id=uuid4(), role="owner")
         auth = Mock()
         auth._household.return_value = (user, member)
         sync_db = Mock()
         sync_db.scalar.return_value = None
+        sync_db.scalars.return_value.all.return_value = [
+            SimpleNamespace(id=uuid4(), currency="SAR", is_archived=False)
+        ]
         db = Mock()
 
         async def run_sync(callback):
@@ -518,13 +526,18 @@ class BudgetMonthRegressionTests(unittest.IsolatedAsyncioTestCase):
                     "month": state.draft["month"],
                     "amount": "100.00",
                     "threshold": "80",
+                    "currency": "SAR",
                 },
             )
         self.assertEqual(state.message, "تم الحفظ بنجاح.")
         self.assertEqual(state.budget_month, "2025-12")
         self.assertEqual(state.editor, "")
         saved = sync_db.add.call_args.args[0]
-        self.assertEqual((saved.year, saved.month), (2025, 12))
+        self.assertEqual(
+            (saved.year, saved.month, saved.currency), (2025, 12, "SAR")
+        )
+        duplicate_query = str(sync_db.scalar.call_args_list[1].args[0])
+        self.assertIn("mh_monthly_category_budgets.currency", duplicate_query)
         reload_state.assert_called_once_with(sync_db, user, member)
         self.load_months(state)
         self.assertEqual(state.budgets[0]["month"], "2025-12")

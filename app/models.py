@@ -278,6 +278,10 @@ class HouseholdMembership(Record, Base):
             "role <> 'owner' OR status = 'active'", name="active_owner"
         ),
         CheckConstraint(
+            "role <> 'owner' OR (can_add_transactions = true AND can_edit_budgets = true)",
+            name="owner_full_permissions",
+        ),
+        CheckConstraint(
             "(status = 'active' AND ended_at IS NULL) OR (status <> 'active' AND ended_at IS NOT NULL)",
             name="ended_status",
         ),
@@ -305,6 +309,12 @@ class HouseholdMembership(Record, Base):
     status: Mapped[str] = mapped_column(
         String(16), default="active", server_default="active"
     )
+    can_add_transactions: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
+    can_edit_budgets: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), nullable=False
+    )
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -315,6 +325,48 @@ class HouseholdMembership(Record, Base):
         foreign_keys=[household_id], viewonly=True, lazy="raise"
     )
     user: Mapped["User"] = relationship(viewonly=True, lazy="raise")
+
+
+class HouseholdAccountRestriction(Record, Base):
+    __tablename__ = "mh_household_account_restrictions"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id",
+            "member_user_id",
+            "account_id",
+            name="uq_mh_account_restriction_member_account",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "member_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        Index(
+            "ix_mh_account_restrictions_household_member",
+            "household_id",
+            "member_user_id",
+        ),
+        Index(
+            "ix_mh_account_restrictions_household_account",
+            "household_id",
+            "account_id",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        default=None,
+        nullable=False,
+    )
+    member_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    account_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
 
 
 class FinancialAccount(Record, Base):
@@ -927,7 +979,8 @@ class MonthlyCategoryBudget(Record, Base):
             "category_id",
             "year",
             "month",
-            name="uq_mh_budget_category_month",
+            "currency",
+            name="uq_mh_budget_category_month_currency",
         ),
         UniqueConstraint("household_id", "id", name="uq_mh_budget_tenant_id"),
         ForeignKeyConstraint(
@@ -948,6 +1001,7 @@ class MonthlyCategoryBudget(Record, Base):
             ondelete="RESTRICT",
         ),
         CheckConstraint("category_kind = 'expense'", name="expense_only"),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
         CheckConstraint(
             "month BETWEEN 1 AND 12 AND year BETWEEN 1900 AND 9999",
             name="period",
@@ -982,6 +1036,9 @@ class MonthlyCategoryBudget(Record, Base):
     month: Mapped[int] = mapped_column(
         Integer,
         server_default=text("EXTRACT(MONTH FROM CURRENT_DATE)::integer"),
+    )
+    currency: Mapped[str] = mapped_column(
+        String(3), default="SAR", server_default="SAR", nullable=False
     )
     amount: Mapped[Decimal] = mapped_column(
         Numeric(19, 4), default=Decimal("0"), server_default="0"

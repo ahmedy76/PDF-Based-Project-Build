@@ -252,6 +252,7 @@ class AuditEventIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_manual_save_and_history_tenant_guard(self):
         state = LedgerState()
         state.editor = "transaction"
+        state.edit_id = ""
         user, member = (
             SimpleNamespace(id=uuid4()),
             SimpleNamespace(household_id=uuid4()),

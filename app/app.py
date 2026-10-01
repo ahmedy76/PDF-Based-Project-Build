@@ -6,6 +6,7 @@ from app.states.categories import CategoryState
 from app.states.ledger import LedgerState
 from app.states.goals import GoalState
 from app.states.debts import DebtState
+from app.states.member_access import MemberAccessState
 
 
 def index() -> rx.Component:
@@ -111,7 +112,7 @@ app.add_page(
     screens.settings,
     route="/settings",
     title="الإعدادات | Money Harmony",
-    on_load=LedgerState.load,
+    on_load=[LedgerState.load, MemberAccessState.load],
 )
 app.add_page(
     screens.categories,

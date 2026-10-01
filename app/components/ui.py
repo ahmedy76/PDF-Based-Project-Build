@@ -221,6 +221,33 @@ def public_shell(content: rx.Component) -> rx.Component:
     )
 
 
+def currency_switcher() -> rx.Component:
+    return rx.el.label(
+        rx.el.span(
+            "عملة العرض · لا تحويل بين العملات",
+            class_name="mb-2 block text-sm font-semibold text-[#465344]",
+        ),
+        rx.el.div(
+            rx.el.select(
+                rx.foreach(
+                    S.view_currencies,
+                    lambda code: rx.el.option(code, value=code),
+                ),
+                value=S.view_currency,
+                on_change=S.set_view_currency,
+                aria_label="عملة عرض الأرصدة والميزانيات والتقارير",
+                class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-[#fffdf8] px-4 py-3 pl-10 text-sm font-bold text-[#27394a] focus:outline-2 focus:outline-[#62704b]",
+            ),
+            rx.icon(
+                "chevron-down",
+                class_name="pointer-events-none absolute left-3 top-4 h-4 w-4 text-[#62704b]",
+            ),
+            class_name="relative",
+        ),
+        class_name="mb-6 block w-full sm:w-72",
+    )
+
+
 def metric(label: str, value, icon: str) -> rx.Component:
     return rx.el.div(
         rx.el.div(
@@ -232,7 +259,7 @@ def metric(label: str, value, icon: str) -> rx.Component:
             rx.el.strong(
                 value, class_name="text-2xl font-bold tabular-nums md:text-3xl"
             ),
-            rx.el.span(S.currency, class_name="text-xs text-[#88907e]"),
+            rx.el.span(S.view_currency, class_name="text-xs text-[#88907e]"),
             class_name="mt-4 flex flex-wrap items-baseline gap-2",
         ),
         class_name=CARD,
@@ -240,28 +267,35 @@ def metric(label: str, value, icon: str) -> rx.Component:
 
 
 def edit_actions(kind: str, row) -> rx.Component:
-    return rx.el.div(
-        rx.el.button(
-            rx.icon("pencil", class_name="h-4 w-4"),
-            "تعديل",
-            on_click=lambda: S.open_editor(kind, row["id"]),
-            class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+    return rx.cond(
+        rx.cond(
+            kind == "budget",
+            S.can_edit_budgets,
+            rx.cond(kind == "transaction", S.can_add_transactions, True),
         ),
-        rx.el.button(
-            rx.cond(
-                kind == "account",
-                rx.icon("archive", class_name="h-4 w-4"),
-                rx.icon("trash-2", class_name="h-4 w-4"),
+        rx.el.div(
+            rx.el.button(
+                rx.icon("pencil", class_name="h-4 w-4"),
+                "تعديل",
+                on_click=lambda: S.open_editor(kind, row["id"]),
+                class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
             ),
-            rx.cond(kind == "account", "إغلاق الحساب", "حذف"),
-            on_click=lambda: S.ask_delete(kind, row["id"]),
-            class_name=rx.cond(
-                kind == "account",
-                "flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
-                "flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#a26550] hover:bg-[#f5e9e3]",
+            rx.el.button(
+                rx.cond(
+                    kind == "account",
+                    rx.icon("archive", class_name="h-4 w-4"),
+                    rx.icon("trash-2", class_name="h-4 w-4"),
+                ),
+                rx.cond(kind == "account", "إغلاق الحساب", "حذف"),
+                on_click=lambda: S.ask_delete(kind, row["id"]),
+                class_name=rx.cond(
+                    kind == "account",
+                    "flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                    "flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#a26550] hover:bg-[#f5e9e3]",
+                ),
             ),
+            class_name="flex gap-1",
         ),
-        class_name="flex gap-1",
     )
 
 
@@ -317,6 +351,7 @@ def transaction_row(row) -> rx.Component:
             rx.el.p(
                 rx.cond(row["kind"] == "income", "+ ", "− "),
                 row["display_amount"],
+                rx.el.span(f" {row['currency']}", class_name="text-xs"),
                 class_name=rx.cond(
                     row["kind"] == "income",
                     "text-left font-bold tabular-nums text-[#62704b]",
@@ -330,11 +365,14 @@ def transaction_row(row) -> rx.Component:
                     on_click=lambda: S.show_transaction_history(row["id"]),
                     class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
                 ),
-                rx.el.button(
-                    rx.icon("copy", class_name="h-4 w-4"),
-                    "إعادة استخدام البيانات",
-                    on_click=lambda: S.reuse_transaction(row["id"]),
-                    class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                rx.cond(
+                    S.can_add_transactions,
+                    rx.el.button(
+                        rx.icon("copy", class_name="h-4 w-4"),
+                        "إعادة استخدام البيانات",
+                        on_click=lambda: S.reuse_transaction(row["id"]),
+                        class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                    ),
                 ),
                 edit_actions("transaction", row),
                 class_name="flex flex-wrap justify-end gap-1",
@@ -356,7 +394,7 @@ def budget_card(row) -> rx.Component:
         rx.el.div(
             rx.el.strong(row["spent"], class_name="text-2xl tabular-nums"),
             rx.el.span(
-                f"من {row['limit']} {S.currency}",
+                f"من {row['limit']} {row['currency']}",
                 class_name="text-sm text-[#7c8178]",
             ),
             class_name="my-5 flex flex-wrap items-baseline gap-2",
@@ -443,6 +481,75 @@ def editor() -> rx.Component:
                                     ],
                                     S.draft["account_type"],
                                 ),
+                                rx.cond(
+                                    S.edit_id == "",
+                                    rx.el.div(
+                                        select_field(
+                                            "عملة الحساب",
+                                            "currency",
+                                            [
+                                                {
+                                                    "id": "SAR",
+                                                    "name": "SAR · ريال سعودي",
+                                                },
+                                                {
+                                                    "id": "USD",
+                                                    "name": "USD · دولار أمريكي",
+                                                },
+                                                {
+                                                    "id": "EUR",
+                                                    "name": "EUR · يورو",
+                                                },
+                                                {
+                                                    "id": "AED",
+                                                    "name": "AED · درهم إماراتي",
+                                                },
+                                                {
+                                                    "id": "GBP",
+                                                    "name": "GBP · جنيه إسترليني",
+                                                },
+                                                {
+                                                    "id": "KWD",
+                                                    "name": "KWD · دينار كويتي",
+                                                },
+                                                {
+                                                    "id": "BHD",
+                                                    "name": "BHD · دينار بحريني",
+                                                },
+                                                {
+                                                    "id": "OMR",
+                                                    "name": "OMR · ريال عماني",
+                                                },
+                                                {
+                                                    "id": "QAR",
+                                                    "name": "QAR · ريال قطري",
+                                                },
+                                                {
+                                                    "id": "EGP",
+                                                    "name": "EGP · جنيه مصري",
+                                                },
+                                            ],
+                                            S.draft["currency"],
+                                        ),
+                                        field(
+                                            "رمز ISO آخر (اختياري، ثلاثة أحرف إنجليزية)",
+                                            "currency_custom",
+                                            required=False,
+                                        ),
+                                        class_name="space-y-3",
+                                    ),
+                                    rx.el.div(
+                                        rx.el.p(
+                                            f"عملة الحساب: {S.draft['currency']} · ثابتة بعد الإنشاء",
+                                            class_name="text-sm font-bold text-[#62704b]",
+                                        ),
+                                        rx.el.input(
+                                            type="hidden",
+                                            name="currency",
+                                            default_value=S.draft["currency"],
+                                        ),
+                                    ),
+                                ),
                                 field(
                                     "الرصيد الافتتاحي",
                                     "opening_balance",
@@ -455,7 +562,7 @@ def editor() -> rx.Component:
                                     S.draft["opening_date"],
                                 ),
                                 rx.el.p(
-                                    "عملة الحساب هي عملة الأسرة. الرصيد الحالي = الافتتاحي + الدخل − المصروف.",
+                                    "اختر العملة بعناية؛ لا يمكن تغييرها بعد إنشاء الحساب. الرصيد الحالي = الافتتاحي + الدخل − المصروف بنفس العملة.",
                                     class_name="text-xs leading-6 text-[#7c8178]",
                                 ),
                                 class_name="space-y-4",
@@ -494,11 +601,33 @@ def editor() -> rx.Component:
                                         class_name="text-sm text-[#a26550]",
                                     ),
                                 ),
-                                select_field(
+                                rx.el.label(
                                     "الحساب",
-                                    "account_id",
-                                    S.transaction_account_options,
-                                    S.draft["account_id"],
+                                    rx.el.div(
+                                        rx.el.select(
+                                            rx.foreach(
+                                                S.transaction_account_options,
+                                                lambda a: rx.el.option(
+                                                    f"{a['name']} · {a['currency']}",
+                                                    value=a["id"],
+                                                ),
+                                            ),
+                                            name="account_id",
+                                            default_value=S.draft["account_id"],
+                                            on_change=S.change_editor_account,
+                                            class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a]",
+                                        ),
+                                        rx.icon(
+                                            "chevron-down",
+                                            class_name="pointer-events-none absolute left-3 top-4 h-4 w-4",
+                                        ),
+                                        class_name="relative mt-2",
+                                    ),
+                                    class_name="block text-sm font-semibold text-[#465344]",
+                                ),
+                                rx.el.p(
+                                    f"عملة المعاملة: {S.transaction_currency}",
+                                    class_name="text-sm font-bold text-[#62704b]",
                                 ),
                                 rx.el.label(
                                     rx.el.span(
@@ -589,11 +718,33 @@ def editor() -> rx.Component:
                                     ],
                                     S.draft["kind"],
                                 ),
-                                select_field(
+                                rx.el.label(
                                     "الحساب",
-                                    "account_id",
-                                    S.accounts,
-                                    S.draft["account_id"],
+                                    rx.el.div(
+                                        rx.el.select(
+                                            rx.foreach(
+                                                S.accounts,
+                                                lambda a: rx.el.option(
+                                                    f"{a['name']} · {a['currency']}",
+                                                    value=a["id"],
+                                                ),
+                                            ),
+                                            name="account_id",
+                                            default_value=S.draft["account_id"],
+                                            on_change=S.change_editor_account,
+                                            class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-white p-3 pl-9 text-[#27394a]",
+                                        ),
+                                        rx.icon(
+                                            "chevron-down",
+                                            class_name="pointer-events-none absolute left-3 top-4 h-4 w-4",
+                                        ),
+                                        class_name="relative mt-2",
+                                    ),
+                                    class_name="block text-sm font-semibold text-[#465344]",
+                                ),
+                                rx.el.p(
+                                    f"عملة التكرار: {S.transaction_currency}",
+                                    class_name="text-sm font-bold text-[#62704b]",
                                 ),
                                 rx.el.label(
                                     rx.el.span(
@@ -696,6 +847,12 @@ def editor() -> rx.Component:
                                 "إدارة فئات المصروف",
                                 href="/categories",
                                 class_name="inline-flex items-center gap-2 text-sm font-bold text-[#62704b] hover:underline",
+                            ),
+                            select_field(
+                                "عملة الميزانية (حساب نشط)",
+                                "currency",
+                                S.active_currencies,
+                                S.draft["currency"],
                             ),
                             field("الشهر", "month", "month", S.draft["month"]),
                             field(
@@ -838,7 +995,7 @@ def delete_confirmation() -> rx.Component:
                     S.delete_kind == "account",
                     rx.el.div(
                         rx.el.p(
-                            f"إغلاق «{S.closing_name}» برصيد مسجّل {S.closing_balance} {S.currency}؟",
+                            f"إغلاق «{S.closing_name}» برصيد مسجّل {S.closing_balance} {S.closing_currency}؟",
                             class_name="font-bold text-[#27394a]",
                         ),
                         rx.el.p(

@@ -13,7 +13,15 @@ from uuid import UUID
 import reflex_xy
 from sqlalchemy import select, func, tuple_
 from app import models as m
-from app.states.auth import AuthState, digest, now
+from app.states.auth import (
+    AuthState,
+    digest,
+    now,
+    require_permission,
+    require_account,
+    visible_account_ids,
+    blocked_budget_currencies,
+)
 
 
 def next_recurring_date(
@@ -54,11 +62,18 @@ class HistoryEntry(TypedDict):
 
 
 class LedgerState(rx.State):
-    ready: bool = False
+    ready: bool
     message: str = ""
     household_name: str = ""
     currency: str = "SAR"
+    view_currency: str = ""
+    currency_household: str = ""
+    view_currencies: list[str] = []
+    active_currencies: list[dict[str, str]] = []
     owner: bool = False
+    can_add_transactions: bool = False
+    can_edit_budgets: bool = False
+    budget_alert_note: str = ""
     households: list[dict[str, str]] = []
     accounts: list[dict[str, str]] = []
     archived_accounts: list[dict[str, str]] = []
@@ -66,6 +81,7 @@ class LedgerState(rx.State):
     has_archived_balance: bool = False
     closing_name: str = ""
     closing_balance: str = ""
+    closing_currency: str = ""
     categories: list[dict[str, str]] = []
     archived_categories: list[dict[str, str]] = []
     transactions: list[dict[str, str]] = []
@@ -107,6 +123,7 @@ class LedgerState(rx.State):
     draft: dict[str, str] = {
         "name": "",
         "account_type": "cash",
+        "currency": "SAR",
         "opening_balance": "0",
         "opening_date": "",
         "account_id": "",
@@ -136,6 +153,17 @@ class LedgerState(rx.State):
             "income": self.trend_income,
             "expense": self.trend_expense,
         }
+
+    @rx.var
+    def transaction_currency(self) -> str:
+        return next(
+            (
+                a["currency"]
+                for a in self.accounts + self.archived_accounts
+                if a["id"] == self.draft["account_id"]
+            ),
+            "",
+        )
 
     @rx.var
     def pending_count(self) -> int:
@@ -281,7 +309,9 @@ class LedgerState(rx.State):
             return {"income": "دخل", "expense": "مصروف"}.get(value, value)
         return value
 
-    def _history_rows(self, events, names, accounts, categories):
+    def _history_rows(
+        self, events, names, accounts, categories, allowed_ids=None
+    ):
         labels = {
             "account_id": "الحساب",
             "category_id": "الفئة",
@@ -318,6 +348,12 @@ class LedgerState(rx.State):
                 ],
             }
             for e in events
+            if allowed_ids is None
+            or all(
+                not snapshot.get("account_id")
+                or snapshot["account_id"] in allowed_ids
+                for snapshot in (e.before_data, e.after_data)
+            )
         ]
 
     def _account_balances(self, accounts, txs):
@@ -458,7 +494,8 @@ class LedgerState(rx.State):
 
     def _budget_row(self, budget, category_names, spending):
         spent = spending.get(
-            (budget.year, budget.month, budget.category_id), Decimal(0)
+            (budget.year, budget.month, budget.category_id, budget.currency),
+            Decimal(0),
         )
         pct = (
             spent / budget.amount * 100
@@ -478,6 +515,7 @@ class LedgerState(rx.State):
             "id": str(budget.id),
             "name": category_names.get(budget.category_id, ""),
             "category_id": str(budget.category_id),
+            "currency": budget.currency,
             "amount": str(budget.amount),
             "limit": f"{budget.amount:,.2f}",
             "spent": f"{spent:,.2f}",
@@ -596,7 +634,17 @@ class LedgerState(rx.State):
         hid = member.household_id
         household = db.get(m.Household, hid)
         self.household_name, self.currency = household.name, household.currency
+        if self.currency_household != str(hid):
+            self.view_currency = ""
+            self.currency_household = str(hid)
         self.owner = member.role == "owner"
+        self.can_add_transactions = self.owner or getattr(
+            member, "can_add_transactions", True
+        )
+        self.can_edit_budgets = self.owner or getattr(
+            member, "can_edit_budgets", True
+        )
+        self.budget_alert_note = ""
         self.households = [
             {"id": str(h.id), "name": h.name}
             for h in db.scalars(
@@ -633,7 +681,29 @@ class LedgerState(rx.State):
             .where(m.FinancialAccount.household_id == hid)
             .order_by(m.FinancialAccount.created_at)
         ).all()
+        allowed_ids = visible_account_ids(db, member, accounts)
+        if self.filter_account and self.filter_account not in {
+            str(aid) for aid in allowed_ids
+        }:
+            self.filter_account = ""
+        accounts = [a for a in accounts if a.id in allowed_ids]
         account_names = {a.id: a.name for a in accounts}
+        account_currencies = {a.id: a.currency for a in accounts}
+        self.view_currencies = sorted({a.currency for a in accounts})
+        self.active_currencies = [
+            {"id": code, "name": code}
+            for code in sorted(
+                {a.currency for a in accounts if not a.is_archived}
+            )
+        ]
+        if self.view_currency not in self.view_currencies:
+            self.view_currency = (
+                household.currency
+                if household.currency in self.view_currencies
+                else self.view_currencies[0]
+                if self.view_currencies
+                else household.currency
+            )
         self.recurring_rules = [
             {
                 "id": str(r.id),
@@ -646,6 +716,9 @@ class LedgerState(rx.State):
                 "name": r.description
                 or category_names.get(r.category_id, "معاملة متكررة"),
                 "account": account_names.get(r.account_id, "حساب سابق"),
+                "currency": account_currencies.get(
+                    r.account_id, household.currency
+                ),
                 "category": category_names.get(r.category_id, "فئة سابقة"),
                 "frequency": r.frequency,
                 "frequency_label": {
@@ -671,7 +744,10 @@ class LedgerState(rx.State):
             }
             for r in db.scalars(
                 select(m.RecurringTransactionRule)
-                .where(m.RecurringTransactionRule.household_id == hid)
+                .where(
+                    m.RecurringTransactionRule.household_id == hid,
+                    m.RecurringTransactionRule.account_id.in_(allowed_ids),
+                )
                 .order_by(m.RecurringTransactionRule.created_at.desc())
             ).all()
         ]
@@ -680,6 +756,7 @@ class LedgerState(rx.State):
             .where(
                 m.Transaction.household_id == hid,
                 m.Transaction.deleted_at.is_(None),
+                m.Transaction.account_id.in_(allowed_ids),
             )
             .order_by(
                 m.Transaction.transaction_date.desc(),
@@ -716,7 +793,14 @@ class LedgerState(rx.State):
             else []
         )
         audit = {}
+        permitted_snapshots = {str(account_id) for account_id in allowed_ids}
         for event, actor_name in audit_rows:
+            if any(
+                snapshot.get("account_id")
+                and snapshot["account_id"] not in permitted_snapshots
+                for snapshot in (event.before_data, event.after_data)
+            ):
+                continue
             entry = audit.setdefault(
                 event.transaction_id, {"origin": "", "editor": ""}
             )
@@ -734,6 +818,11 @@ class LedgerState(rx.State):
             e.transaction_id
             for e, _ in audit_rows
             if e.action in ("created", "auto_created")
+            and all(
+                not snapshot.get("account_id")
+                or snapshot["account_id"] in permitted_snapshots
+                for snapshot in (e.before_data, e.after_data)
+            )
         }
         creator_names = (
             dict(
@@ -760,6 +849,7 @@ class LedgerState(rx.State):
                 "id": str(a.id),
                 "name": a.name,
                 "account_type": a.account_type,
+                "currency": a.currency,
                 "opening_balance": str(a.opening_balance),
                 "opening_date": a.opening_date.isoformat(),
                 "balance": f"{balances[a.id]:,.2f}",
@@ -773,15 +863,28 @@ class LedgerState(rx.State):
             row for row, a in zip(account_rows, accounts) if a.is_archived
         ]
         active_balance = sum(
-            (balances[a.id] for a in accounts if not a.is_archived), Decimal(0)
+            (
+                balances[a.id]
+                for a in accounts
+                if not a.is_archived and a.currency == self.view_currency
+            ),
+            Decimal(0),
         )
         archived_balance = sum(
-            (balances[a.id] for a in accounts if a.is_archived), Decimal(0)
+            (
+                balances[a.id]
+                for a in accounts
+                if a.is_archived and a.currency == self.view_currency
+            ),
+            Decimal(0),
         )
         self.total = f"{active_balance:,.2f}"
         self.archived_total = f"{archived_balance:,.2f}"
         self.has_archived_balance = any(
-            a.is_archived and balances[a.id] != 0 for a in accounts
+            a.is_archived
+            and a.currency == self.view_currency
+            and balances[a.id] != 0
+            for a in accounts
         )
         self.transactions = [
             {
@@ -794,6 +897,9 @@ class LedgerState(rx.State):
                 "display_amount": f"{t.amount:,.2f}",
                 "account_id": str(t.account_id),
                 "account": account_names.get(t.account_id, "حساب سابق"),
+                "currency": account_currencies.get(
+                    t.account_id, household.currency
+                ),
                 "category_id": str(t.category_id),
                 "category": category_names.get(t.category_id, ""),
                 "transaction_date": t.transaction_date.isoformat(),
@@ -827,7 +933,12 @@ class LedgerState(rx.State):
         ]
         today = date.today()
         start = today.replace(day=1)
-        month_txs = [t for t in txs if start <= t.transaction_date <= today]
+        month_txs = [
+            t
+            for t in txs
+            if start <= t.transaction_date <= today
+            and account_currencies.get(t.account_id) == self.view_currency
+        ]
         inc = sum(
             (t.amount for t in month_txs if t.kind == "income"), Decimal(0)
         )
@@ -860,19 +971,28 @@ class LedgerState(rx.State):
         for t in txs:
             month_key = (t.transaction_date.year, t.transaction_date.month)
             if t.kind == "expense" and month_key in requested_months:
-                key = (*month_key, t.category_id)
+                key = (
+                    *month_key,
+                    t.category_id,
+                    account_currencies.get(t.account_id),
+                )
                 spending[key] = spending.get(key, Decimal(0)) + t.amount
         budget_rows = [
             self._budget_row(b, category_names, spending)
             for b in budget_records
+            if b.currency in self.view_currencies
         ]
         self.budgets = [
-            row for row in budget_rows if row["month"] == self.budget_month
+            row
+            for row in budget_rows
+            if row["month"] == self.budget_month
+            and row["currency"] == self.view_currency
         ]
         self.dashboard_budgets = [
             row
             for row in budget_rows
             if row["month"] == today.strftime("%Y-%m")
+            and row["currency"] == self.view_currency
         ]
         self._expire(db, hid)
         self.invitations = [
@@ -888,6 +1008,23 @@ class LedgerState(rx.State):
                 .order_by(m.PartnerInvitation.created_at.desc())
             ).all()
         ]
+        blocked_currencies = blocked_budget_currencies(db, member)
+        if blocked_currencies:
+            self.budget_alert_note = "تنبيهات ميزانيات العملات التي تحتوي حسابات محجوبة مخفية حفاظًا على خصوصية الأسرة."
+        visible_notifications = []
+        for notification in db.scalars(
+            select(m.Notification)
+            .where(
+                m.Notification.household_id == hid,
+                m.Notification.recipient_user_id == user.id,
+                m.Notification.channel == "in_app",
+            )
+            .order_by(m.Notification.created_at.desc())
+        ).all():
+            if self._notification_visible(
+                db, notification, hid, allowed_ids, blocked_currencies
+            ):
+                visible_notifications.append(notification)
         self.notifications = [
             {
                 "id": str(n.id),
@@ -896,15 +1033,7 @@ class LedgerState(rx.State):
                 "date": n.created_at.strftime("%Y-%m-%d"),
                 "read": "yes" if n.read_at else "no",
             }
-            for n in db.scalars(
-                select(m.Notification)
-                .where(
-                    m.Notification.household_id == hid,
-                    m.Notification.recipient_user_id == user.id,
-                    m.Notification.channel == "in_app",
-                )
-                .order_by(m.Notification.created_at.desc())
-            ).all()
+            for n in visible_notifications
         ]
         prefs = {
             p.kind: p.enabled
@@ -929,7 +1058,12 @@ class LedgerState(rx.State):
             ]
         ]
         start, end = self._report_bounds(today)
-        selected = [t for t in txs if start <= t.transaction_date <= end]
+        selected = [
+            t
+            for t in txs
+            if start <= t.transaction_date <= end
+            and account_currencies.get(t.account_id) == self.view_currency
+        ]
         ri = sum((t.amount for t in selected if t.kind == "income"), Decimal(0))
         rexp = sum(
             (t.amount for t in selected if t.kind == "expense"), Decimal(0)
@@ -989,8 +1123,75 @@ class LedgerState(rx.State):
         )
         self.ready = True
 
+    def _clear_visible(self):
+        self.accounts = []
+        self.archived_accounts = []
+        self.transactions = []
+        self.recurring_rules = []
+        self.budgets = []
+        self.dashboard_budgets = []
+        self.notifications = []
+        self.view_currencies = []
+        self.active_currencies = []
+        self.report_labels = []
+        self.report_values = []
+        self.categories = []
+        self.archived_categories = []
+        self.households = []
+        self.invitations = []
+        self.preferences = []
+        self.trend_dates = []
+        self.trend_income = []
+        self.trend_expense = []
+        self.total = self.archived_total = self.income = self.expense = (
+            self.saving
+        ) = "0.00"
+        self.report_income = self.report_expense = self.report_saving = "0.00"
+        self.has_archived_balance = False
+        self.owner = self.can_add_transactions = self.can_edit_budgets = False
+        self.budget_alert_note = ""
+        self.history_id = self.history_title = self.history_legacy = ""
+        self.history_events = []
+        self.editor = self.edit_id = self.delete_id = ""
+
+    def _notification_visible(
+        self, db, notification, hid, allowed_ids, blocked_currencies
+    ):
+        if notification.kind == "partner_transaction":
+            if not notification.transaction_id:
+                return False
+            transaction = db.scalar(
+                select(m.Transaction).where(
+                    m.Transaction.id == notification.transaction_id,
+                    m.Transaction.household_id == hid,
+                )
+            )
+            return (
+                transaction is not None
+                and transaction.account_id in allowed_ids
+            )
+        if notification.kind in ("budget_warning", "budget_exceeded"):
+            if not notification.budget_id:
+                return False
+            budget = db.scalar(
+                select(m.MonthlyCategoryBudget).where(
+                    m.MonthlyCategoryBudget.id == notification.budget_id,
+                    m.MonthlyCategoryBudget.household_id == hid,
+                )
+            )
+            return (
+                budget is not None
+                and budget.currency not in blocked_currencies
+                and any(
+                    a["currency"] == budget.currency
+                    for a in self.accounts + self.archived_accounts
+                )
+            )
+        return True
+
     @rx.event
     async def load(self):
+        self._clear_visible()
         self.ready = False
         self.editor = ""
         self.history_id = ""
@@ -1030,11 +1231,30 @@ class LedgerState(rx.State):
         self.invite_link = ""
         self.history_id = ""
         self.history_events = []
-        self.transactions = []
-        self.accounts = []
+        self._clear_visible()
+        self.filter_account = self.filter_category = self.filter_kind = ""
         self.categories = []
+        self.archived_categories = []
+        self.invitations = []
         self.ready = False
+        from app.states.member_access import MemberAccessState
+
+        access = await self.get_state(MemberAccessState)
+        access.members = []
+        access.owner = False
+        access.message = ""
         yield LedgerState.load
+        yield MemberAccessState.load
+
+    @rx.event
+    async def set_view_currency(self, code: str):
+        if code not in self.view_currencies:
+            self.message = "عملة العرض غير متاحة لهذه الأسرة."
+            return
+        if code != self.view_currency:
+            self.view_currency = code
+            self.message = ""
+            yield LedgerState.load
 
     @rx.event
     async def set_period(self, period: str):
@@ -1099,6 +1319,7 @@ class LedgerState(rx.State):
         self.draft = {
             "name": "",
             "account_type": "cash",
+            "currency": self.currency,
             "opening_balance": "0",
             "opening_date": today,
             "account_id": "",
@@ -1123,6 +1344,24 @@ class LedgerState(rx.State):
         for key in self.draft:
             if key in record:
                 self.draft[key] = record[key]
+        if kind == "budget" and not record_id:
+            self.draft = {
+                **self.draft,
+                "currency": self.view_currency
+                if self.view_currency
+                in {a["id"] for a in self.active_currencies}
+                else (
+                    self.active_currencies[0]["id"]
+                    if self.active_currencies
+                    else ""
+                ),
+            }
+        if (
+            kind in ("transaction", "recurring")
+            and not record_id
+            and self.accounts
+        ):
+            self.draft = {**self.draft, "account_id": self.accounts[0]["id"]}
         if kind == "transaction" and not record_id:
             account_ids = {a["id"] for a in self.accounts}
             category_ids = {
@@ -1168,6 +1407,18 @@ class LedgerState(rx.State):
                     )
                 ),
             }
+
+    @rx.event
+    def change_editor_account(self, value: str):
+        options = (
+            self.transaction_account_options
+            if self.editor == "transaction"
+            else self.accounts
+        )
+        if self.editor in ("transaction", "recurring") and value in {
+            a["id"] for a in options
+        }:
+            self.draft = {**self.draft, "account_id": value}
 
     @rx.event
     def change_transaction_kind(self, value: str):
@@ -1240,6 +1491,16 @@ class LedgerState(rx.State):
                 )
                 if transaction is None:
                     raise ValueError("المعاملة غير متاحة لهذه الأسرة.")
+                require_account(db, member, transaction.account_id)
+                allowed_ids = visible_account_ids(
+                    db,
+                    member,
+                    db.scalars(
+                        select(m.FinancialAccount).where(
+                            m.FinancialAccount.household_id == hid
+                        )
+                    ).all(),
+                )
                 events = db.scalars(
                     select(m.TransactionAuditEvent)
                     .where(
@@ -1277,7 +1538,10 @@ class LedgerState(rx.State):
                     db.execute(
                         select(
                             m.FinancialAccount.id, m.FinancialAccount.name
-                        ).where(m.FinancialAccount.household_id == hid)
+                        ).where(
+                            m.FinancialAccount.household_id == hid,
+                            m.FinancialAccount.id.in_(allowed_ids),
+                        )
                     ).all()
                 )
                 categories = dict(
@@ -1300,6 +1564,17 @@ class LedgerState(rx.State):
                         f"أضافها {names.get(transaction.created_by_user_id, 'عضو سابق')} · {transaction.created_at:%Y-%m-%d %H:%M}"
                     )
                 )
+                permitted = {str(account_id) for account_id in allowed_ids}
+                hidden_history = any(
+                    snapshot.get("account_id")
+                    and snapshot["account_id"] not in permitted
+                    for event in events
+                    for snapshot in (event.before_data, event.after_data)
+                )
+                if hidden_history:
+                    legacy = (
+                        f"{legacy} بعض التعديلات مخفية لأنها تخص حسابًا محجوبًا."
+                    )
                 return (
                     transaction.description
                     or categories.get(transaction.category_id, "معاملة"),
@@ -1309,6 +1584,7 @@ class LedgerState(rx.State):
                         names,
                         {str(k): v for k, v in accounts.items()},
                         {str(k): v for k, v in categories.items()},
+                        permitted,
                     ),
                 )
 
@@ -1371,6 +1647,14 @@ class LedgerState(rx.State):
                         )
                     ):
                         raise ValueError("اسم الحساب ونوعه مطلوبان.")
+                    code = (
+                        str(data.get("currency_custom", "")).strip().upper()
+                        or str(data.get("currency", "")).strip().upper()
+                    )
+                    if not re.fullmatch(r"[A-Z]{3}", code):
+                        raise ValueError(
+                            "أدخل رمز عملة ISO من ثلاثة أحرف إنجليزية."
+                        )
                     record = (
                         self._record(
                             sync_db, m.FinancialAccount, self.edit_id, hid
@@ -1382,8 +1666,16 @@ class LedgerState(rx.State):
                             currency=sync_db.get(m.Household, hid).currency,
                         )
                     )
+                    if self.edit_id:
+                        require_account(sync_db, member, record.id)
                     if record.is_archived:
                         raise ValueError("الحساب غير متاح.")
+                    if self.edit_id and code != record.currency:
+                        raise ValueError(
+                            "عملة الحساب ثابتة بعد إنشائه حفاظًا على الرصيد والتاريخ. أنشئ حسابًا جديدًا بعملة أخرى."
+                        )
+                    if not self.edit_id:
+                        record.currency = code
                     opening = date.fromisoformat(
                         str(data.get("opening_date", ""))
                     )
@@ -1415,6 +1707,7 @@ class LedgerState(rx.State):
                     record.opening_date = opening
                     sync_db.add(record)
                 elif self.editor == "transaction":
+                    require_permission(member, "can_add_transactions")
                     account = self._record(
                         sync_db,
                         m.FinancialAccount,
@@ -1435,6 +1728,7 @@ class LedgerState(rx.State):
                     )
                     if record is not None and record.deleted_at:
                         raise ValueError("المعاملة محذوفة.")
+                    require_account(sync_db, member, account.id)
                     self._validate_transaction_category(record, category, kind)
                     original_account = (
                         self._record(
@@ -1446,6 +1740,8 @@ class LedgerState(rx.State):
                         if record is not None
                         else None
                     )
+                    if original_account is not None:
+                        require_account(sync_db, member, original_account.id)
                     self._validate_transaction_account(
                         record, account, original_account
                     )
@@ -1487,6 +1783,18 @@ class LedgerState(rx.State):
                         before,
                     )
                     if changed:
+                        restricted_users = set(
+                            sync_db.scalars(
+                                select(
+                                    m.HouseholdAccountRestriction.member_user_id
+                                ).where(
+                                    m.HouseholdAccountRestriction.household_id
+                                    == hid,
+                                    m.HouseholdAccountRestriction.account_id
+                                    == record.account_id,
+                                )
+                            ).all()
+                        )
                         for other in sync_db.scalars(
                             select(m.HouseholdMembership).where(
                                 m.HouseholdMembership.household_id == hid,
@@ -1494,6 +1802,11 @@ class LedgerState(rx.State):
                                 m.HouseholdMembership.user_id != user.id,
                             )
                         ).all():
+                            if (
+                                other.role != "owner"
+                                and other.user_id in restricted_users
+                            ):
+                                continue
                             self._notify(
                                 sync_db,
                                 hid,
@@ -1504,6 +1817,7 @@ class LedgerState(rx.State):
                             )
                         self._budget_alerts(sync_db, hid)
                 elif self.editor == "recurring":
+                    require_permission(member, "can_add_transactions")
                     account = self._record(
                         sync_db,
                         m.FinancialAccount,
@@ -1517,6 +1831,7 @@ class LedgerState(rx.State):
                         hid,
                     )
                     kind = str(data.get("kind", ""))
+                    require_account(sync_db, member, account.id)
                     self._validate_transaction_account(None, account, None)
                     self._validate_transaction_category(None, category, kind)
                     frequency = str(data.get("frequency", ""))
@@ -1554,6 +1869,8 @@ class LedgerState(rx.State):
                             household_id=hid, created_by_user_id=user.id
                         )
                     )
+                    if self.edit_id:
+                        require_account(sync_db, member, record.account_id)
                     record.account_id, record.category_id, record.kind = (
                         account.id,
                         category.id,
@@ -1575,6 +1892,7 @@ class LedgerState(rx.State):
                     sync_db.flush()
                     self._materialize_due(sync_db, hid, date.today())
                 elif self.editor == "budget":
+                    require_permission(member, "can_edit_budgets")
                     category = self._record(
                         sync_db,
                         m.Category,
@@ -1590,17 +1908,35 @@ class LedgerState(rx.State):
                         or not 1 <= threshold <= 100
                     ):
                         raise ValueError("الشهر أو نسبة التنبيه غير صحيحة.")
+                    code = str(data.get("currency", "")).strip().upper()
+                    active_accounts = sync_db.scalars(
+                        select(m.FinancialAccount).where(
+                            m.FinancialAccount.household_id == hid,
+                            m.FinancialAccount.is_archived.is_(False),
+                        )
+                    ).all()
+                    allowed = visible_account_ids(
+                        sync_db, member, active_accounts
+                    )
+                    available = {
+                        a.currency for a in active_accounts if a.id in allowed
+                    }
+                    if not available and not self.edit_id:
+                        raise ValueError("أضف حسابًا نشطًا قبل إنشاء ميزانية.")
+                    if code not in available:
+                        raise ValueError("اختر عملة حساب نشط لهذه الميزانية.")
                     duplicate = sync_db.scalar(
                         select(m.MonthlyCategoryBudget).where(
                             m.MonthlyCategoryBudget.household_id == hid,
                             m.MonthlyCategoryBudget.category_id == category.id,
                             m.MonthlyCategoryBudget.year == month.year,
                             m.MonthlyCategoryBudget.month == month.month,
+                            m.MonthlyCategoryBudget.currency == code,
                         )
                     )
                     if duplicate and str(duplicate.id) != self.edit_id:
                         raise ValueError(
-                            "توجد ميزانية لهذه الفئة في الشهر المحدد. عدّلها بدلًا من التكرار."
+                            "توجد ميزانية لهذه الفئة والشهر والعملة. عدّلها بدلًا من التكرار."
                         )
                     record = (
                         self._record(
@@ -1611,6 +1947,23 @@ class LedgerState(rx.State):
                             household_id=hid, created_by_user_id=user.id
                         )
                     )
+                    if self.edit_id and record.currency not in available:
+                        raise ValueError("ميزانية عملة غير متاحة لك.")
+                    if self.edit_id and (
+                        record.currency != code
+                        or record.category_id != category.id
+                        or record.year != month.year
+                        or record.month != month.month
+                    ):
+                        for notification in sync_db.scalars(
+                            select(m.Notification).where(
+                                m.Notification.household_id == hid,
+                                m.Notification.budget_id == record.id,
+                            )
+                        ).all():
+                            notification.budget_id = None
+                        sync_db.flush()
+                    record.currency = code
                     record.category_id, record.year, record.month = (
                         category.id,
                         month.year,
@@ -1624,6 +1977,7 @@ class LedgerState(rx.State):
                     sync_db.flush()
                     self._budget_alerts(sync_db, hid)
                     self.budget_month = month.strftime("%Y-%m")
+                    self.view_currency = code
                 else:
                     raise ValueError("اختر العملية المطلوبة.")
                 sync_db.commit()
@@ -1656,9 +2010,11 @@ class LedgerState(rx.State):
                     .where(m.Household.id == hid)
                     .with_for_update()
                 )
+                require_permission(member, "can_add_transactions")
                 rule = self._record(
                     db, m.RecurringTransactionRule, record_id, hid
                 )
+                require_account(db, member, rule.account_id)
                 if rule.is_active:
                     rule.is_active = False
                     message = "أُوقف التكرار؛ لن تُنشأ معاملات جديدة حتى تستأنفه."
@@ -1715,7 +2071,17 @@ class LedgerState(rx.State):
                 else date.max
             )
             spent = db.scalar(
-                select(func.coalesce(func.sum(m.Transaction.amount), 0)).where(
+                select(func.coalesce(func.sum(m.Transaction.amount), 0))
+                .join(
+                    m.FinancialAccount,
+                    (m.FinancialAccount.id == m.Transaction.account_id)
+                    & (
+                        m.FinancialAccount.household_id
+                        == m.Transaction.household_id
+                    ),
+                )
+                .where(
+                    m.FinancialAccount.currency == b.currency,
                     m.Transaction.household_id == hid,
                     m.Transaction.category_id == b.category_id,
                     m.Transaction.kind == "expense",
@@ -1730,12 +2096,37 @@ class LedgerState(rx.State):
                 or spent < b.amount * Decimal(b.alert_threshold_percent) / 100
             ):
                 continue
+            restricted_users = set(
+                db.scalars(
+                    select(m.HouseholdAccountRestriction.member_user_id)
+                    .join(
+                        m.FinancialAccount,
+                        (
+                            m.FinancialAccount.id
+                            == m.HouseholdAccountRestriction.account_id
+                        )
+                        & (
+                            m.FinancialAccount.household_id
+                            == m.HouseholdAccountRestriction.household_id
+                        ),
+                    )
+                    .where(
+                        m.HouseholdAccountRestriction.household_id == hid,
+                        m.FinancialAccount.currency == b.currency,
+                    )
+                ).all()
+            )
             for member in db.scalars(
                 select(m.HouseholdMembership).where(
                     m.HouseholdMembership.household_id == hid,
                     m.HouseholdMembership.status == "active",
                 )
             ).all():
+                if (
+                    member.role != "owner"
+                    and member.user_id in restricted_users
+                ):
+                    continue
                 exists = db.scalar(
                     select(m.Notification.id).where(
                         m.Notification.household_id == hid,
@@ -1747,9 +2138,9 @@ class LedgerState(rx.State):
                 if not exists:
                     category = db.get(m.Category, b.category_id)
                     title = (
-                        f"تجاوزت ميزانية {category.name}"
+                        f"تجاوزت ميزانية {category.name} ({b.currency})"
                         if kind == "budget_exceeded"
-                        else f"اقتربت من حد ميزانية {category.name}"
+                        else f"اقتربت من حد ميزانية {category.name} ({b.currency})"
                     )
                     self._notify(
                         db, hid, member.user_id, kind, title, budget_id=b.id
@@ -1766,6 +2157,7 @@ class LedgerState(rx.State):
         )
         self.closing_name = account.get("name", "")
         self.closing_balance = account.get("balance", "")
+        self.closing_currency = account.get("currency", "")
 
     @rx.event
     async def confirm_delete(self):
@@ -1784,13 +2176,16 @@ class LedgerState(rx.State):
                     record = self._record(
                         sync_db, m.FinancialAccount, self.delete_id, hid
                     )
+                    require_account(sync_db, member, record.id)
                     if record.is_archived:
                         raise ValueError("الحساب مغلق بالفعل.")
                     record.is_archived = True
                 elif self.delete_kind == "transaction":
+                    require_permission(member, "can_add_transactions")
                     record = self._record(
                         sync_db, m.Transaction, self.delete_id, hid
                     )
+                    require_account(sync_db, member, record.account_id)
                     if record.deleted_at is not None:
                         raise ValueError("المعاملة محذوفة بالفعل.")
                     before = self._transaction_snapshot(record)
@@ -1799,9 +2194,21 @@ class LedgerState(rx.State):
                         sync_db, record, "deleted", user.id, before
                     )
                 elif self.delete_kind == "budget":
+                    require_permission(member, "can_edit_budgets")
                     record = self._record(
                         sync_db, m.MonthlyCategoryBudget, self.delete_id, hid
                     )
+                    active_accounts = sync_db.scalars(
+                        select(m.FinancialAccount).where(
+                            m.FinancialAccount.household_id == hid,
+                            m.FinancialAccount.is_archived.is_(False),
+                            m.FinancialAccount.currency == record.currency,
+                        )
+                    ).all()
+                    if not visible_account_ids(
+                        sync_db, member, active_accounts
+                    ):
+                        raise ValueError("ميزانية عملة غير متاحة لك.")
                     for n in sync_db.scalars(
                         select(m.Notification).where(
                             m.Notification.household_id == hid,
@@ -2042,8 +2449,18 @@ class LedgerState(rx.State):
                 )
                 if record_id:
                     query = query.where(m.Notification.id == UUID(record_id))
+                accounts = sync_db.scalars(
+                    select(m.FinancialAccount).where(
+                        m.FinancialAccount.household_id == member.household_id
+                    )
+                ).all()
+                allowed_ids = visible_account_ids(sync_db, member, accounts)
+                blocked = blocked_budget_currencies(sync_db, member)
                 for n in sync_db.scalars(query).all():
-                    n.read_at = now()
+                    if self._notification_visible(
+                        sync_db, n, member.household_id, allowed_ids, blocked
+                    ):
+                        n.read_at = now()
                 sync_db.commit()
                 self._load(sync_db, user, member)
 

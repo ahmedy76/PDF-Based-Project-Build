@@ -22,6 +22,65 @@ def now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def require_permission(member, permission: str) -> None:
+    if getattr(member, "role", "owner") != "owner" and not getattr(
+        member, permission, False
+    ):
+        raise ValueError("ليس لديك صلاحية تنفيذ هذه العملية في الأسرة.")
+
+
+def denied_account_ids(db, household_id, user_id) -> set[UUID]:
+    return set(
+        db.scalars(
+            select(m.HouseholdAccountRestriction.account_id).where(
+                m.HouseholdAccountRestriction.household_id == household_id,
+                m.HouseholdAccountRestriction.member_user_id == user_id,
+            )
+        ).all()
+    )
+
+
+def visible_account_ids(db, member, accounts) -> set[UUID]:
+    ids = {account.id for account in accounts}
+    if member.role == "owner":
+        return ids
+    return ids - denied_account_ids(db, member.household_id, member.user_id)
+
+
+def require_account(db, member, account_id: UUID) -> None:
+    if getattr(
+        member, "role", "owner"
+    ) != "owner" and account_id in denied_account_ids(
+        db, member.household_id, member.user_id
+    ):
+        raise ValueError("الحساب غير متاح لك في هذه الأسرة.")
+
+
+def blocked_budget_currencies(db, member) -> set[str]:
+    if member.role == "owner":
+        return set()
+    return set(
+        db.scalars(
+            select(m.FinancialAccount.currency)
+            .join(
+                m.HouseholdAccountRestriction,
+                (
+                    m.HouseholdAccountRestriction.account_id
+                    == m.FinancialAccount.id
+                )
+                & (
+                    m.HouseholdAccountRestriction.household_id
+                    == m.FinancialAccount.household_id
+                ),
+            )
+            .where(
+                m.FinancialAccount.household_id == member.household_id,
+                m.HouseholdAccountRestriction.member_user_id == member.user_id,
+            )
+        ).all()
+    )
+
+
 class AuthState(rx.State):
     token: str = rx.Cookie(
         "", name="mh_session", secure=True, same_site="strict", max_age=86400
