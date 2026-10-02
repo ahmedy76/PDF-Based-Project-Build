@@ -765,6 +765,12 @@ def transactions() -> rx.Component:
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
             ),
+            rx.el.a(
+                rx.icon("file-up", class_name="h-4 w-4"),
+                "استيراد وتصدير CSV",
+                href="/data-transfer",
+                class_name="mb-5 inline-flex items-center gap-2 text-sm font-bold text-[#62704b] hover:underline",
+            ),
             rx.el.details(
                 rx.el.summary(
                     "تصفية الدفتر حسب النوع والحساب والفئة والفترة",
@@ -2260,6 +2266,12 @@ def settings() -> rx.Component:
                             "إدارة فئات الدخل والمصروف",
                             href="/categories",
                             class_name="mt-5 inline-flex items-center gap-2 rounded-xl border border-[#dce0ce] bg-[#edf0e3] px-4 py-3 text-sm font-bold text-[#62704b] hover:bg-[#e2e9d6]",
+                        ),
+                        rx.el.a(
+                            rx.icon("file-up", class_name="h-5 w-5"),
+                            "استيراد وتصدير بيانات CSV",
+                            href="/data-transfer",
+                            class_name="mt-3 inline-flex items-center gap-2 rounded-xl border border-[#dce0ce] bg-[#edf0e3] px-4 py-3 text-sm font-bold text-[#62704b] hover:bg-[#e2e9d6]",
                         ),
                         rx.el.a(
                             "قبول دعوة إلى أسرة",

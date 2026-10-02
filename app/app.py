@@ -2,6 +2,8 @@ import reflex as rx
 
 from app.components import screens
 from app.components.bills import bills_page
+from app.components.csv_transfer import data_transfer_page
+from app.states.csv_transfer import CsvTransferState
 from app.states.bills import BillState
 from app.states.auth import AuthState
 from app.states.categories import CategoryState
@@ -127,6 +129,12 @@ app.add_page(
     route="/categories",
     title="فئات الأسرة | Money Harmony",
     on_load=[LedgerState.load, CategoryState.load],
+)
+app.add_page(
+    data_transfer_page,
+    route="/data-transfer",
+    title="استيراد وتصدير CSV | Money Harmony",
+    on_load=[LedgerState.load, CsvTransferState.load],
 )
 app.add_page(
     screens.accept_invitation,

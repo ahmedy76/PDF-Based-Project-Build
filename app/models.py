@@ -14,6 +14,7 @@ from sqlalchemy import (
     Index,
     Integer,
     JSON,
+    LargeBinary,
     MetaData,
     Numeric,
     String,
@@ -736,6 +737,63 @@ class Transaction(Record, Base):
         viewonly=True, lazy="raise"
     )
     recurring_rule: Mapped["RecurringTransactionRule | None"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+
+
+class TransactionReceipt(Record, Base):
+    __tablename__ = "mh_transaction_receipts"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "transaction_id", name="uq_mh_receipt_transaction"
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "transaction_id"],
+            ["mh_transactions.household_id", "mh_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("length(trim(filename)) > 0", name="filename_required"),
+        CheckConstraint(
+            "mime_type IN ('image/png', 'image/jpeg', 'application/pdf', 'image/webp')",
+            name="allowed_mime_type",
+        ),
+        CheckConstraint(
+            "size_bytes BETWEEN 1 AND 5242880", name="size_bytes_range"
+        ),
+        CheckConstraint(
+            "octet_length(content) = size_bytes", name="content_size_matches"
+        ),
+        Index(
+            "ix_mh_transaction_receipts_household_created",
+            "household_id",
+            "created_at",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    transaction_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    mime_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[bytes] = mapped_column(
+        LargeBinary, nullable=False, deferred=True
+    )
+    size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
+    household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
+    transaction: Mapped["Transaction"] = relationship(
+        viewonly=True, lazy="raise"
+    )
+    creator_membership: Mapped["HouseholdMembership"] = relationship(
         viewonly=True, lazy="raise"
     )
 

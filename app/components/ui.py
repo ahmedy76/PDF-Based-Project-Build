@@ -2,6 +2,8 @@ import reflex as rx
 
 from app.states.auth import AuthState
 from app.states.ledger import LedgerState as S
+from app.states.receipts import ReceiptState
+from app.components.receipts import receipt_modal
 
 
 BUTTON = "inline-flex items-center justify-center gap-2 rounded-xl bg-[#62704b] px-5 py-3 text-sm font-bold text-white hover:bg-[#4f5e3c] focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-[#62704b] transition-colors disabled:opacity-50"
@@ -176,6 +178,7 @@ def shell(content: rx.Component) -> rx.Component:
                     editor(),
                     delete_confirmation(),
                     transaction_history(),
+                    receipt_modal(),
                     class_name="mx-auto w-full max-w-[1320px]",
                 ),
                 rx.el.div(
@@ -360,6 +363,12 @@ def transaction_row(row) -> rx.Component:
                 ),
             ),
             rx.el.div(
+                rx.el.button(
+                    rx.icon("paperclip", class_name="h-4 w-4"),
+                    "الإيصال",
+                    on_click=lambda: ReceiptState.open_receipt(row["id"]),
+                    class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
+                ),
                 rx.el.button(
                     rx.icon("history", class_name="h-4 w-4"),
                     "سجل التعديلات",

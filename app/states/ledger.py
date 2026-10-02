@@ -1317,6 +1317,9 @@ class LedgerState(rx.State):
         access.members = []
         access.owner = False
         access.message = ""
+        from app.states.receipts import ReceiptState
+
+        yield ReceiptState.close_receipt
         yield LedgerState.load
         yield MemberAccessState.load
 
