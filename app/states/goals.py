@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 import re
 from datetime import date
 from decimal import Decimal
@@ -12,6 +12,8 @@ from sqlalchemy import func, select
 from app import models as m
 from app.states.auth import AuthState
 from app.states.ledger import LedgerState
+
+import logging
 
 
 class AllocationRow(TypedDict):
@@ -60,7 +62,7 @@ class GoalState(rx.State):
             return UUID(str(value))
         except (ValueError, TypeError, AttributeError) as e:
             logging.exception("Unexpected error")
-            raise ValueError("الهدف غير موجود أو غير متاح لهذه الأسرة.") from e
+            raise ValueError("الهدف غير موجود أو غير متاح لهذه الأسرة.")
 
     def _guard(self, db, hid: UUID, uid: UUID):
         household = db.scalar(
@@ -273,7 +275,8 @@ class GoalState(rx.State):
             logging.exception("Unexpected error")
             return rx.redirect("/login")
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("goals.load", e)
             self.error = "تعذر تحميل الأهداف. حاول مجددًا."
 
     @rx.event
@@ -349,7 +352,8 @@ class GoalState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("goals.save_goal", e)
             self.error = "تعذر حفظ الهدف. حاول مجددًا."
 
     @rx.event
@@ -385,7 +389,8 @@ class GoalState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("goals.save_allocation", e)
             self.error = "تعذر تحديث التخصيص. حاول مجددًا."
 
     @rx.event
@@ -416,5 +421,6 @@ class GoalState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("goals.set_archived", e)
             self.error = "تعذر تحديث حالة الهدف. حاول مجددًا."

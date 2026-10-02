@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 from typing import TypedDict
 from uuid import UUID
 
@@ -8,6 +8,8 @@ from sqlalchemy import select
 
 from app import models as m
 from app.states.auth import AuthState
+
+import logging
 
 
 class AccountAccess(TypedDict):
@@ -53,7 +55,7 @@ class MemberAccessState(rx.State):
             target_uuid = UUID(target_id)
         except (ValueError, TypeError, AttributeError) as e:
             logging.exception("Unexpected error")
-            raise ValueError("العضو غير متاح لهذه الأسرة.") from e
+            raise ValueError("العضو غير متاح لهذه الأسرة.")
         target = db.scalar(
             select(m.HouseholdMembership)
             .where(
@@ -148,7 +150,8 @@ class MemberAccessState(rx.State):
             self.members = []
             self.owner = False
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("member_access.load", e)
             self.members = []
             self.owner = False
             self.message = "تعذر تحميل صلاحيات الأعضاء. أعد المحاولة."
@@ -182,7 +185,8 @@ class MemberAccessState(rx.State):
             self.message = str(e)
             self.error = True
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("member_access.toggle_permission", e)
             self.message = "تعذر حفظ صلاحية العضو. أعد المحاولة."
             self.error = True
 
@@ -193,7 +197,7 @@ class MemberAccessState(rx.State):
                 account_uuid = UUID(account_id)
             except (ValueError, TypeError, AttributeError) as e:
                 logging.exception("Unexpected error")
-                raise ValueError("الحساب غير متاح لهذه الأسرة.") from e
+                raise ValueError("الحساب غير متاح لهذه الأسرة.")
             auth = await self.get_state(AuthState)
             async with rx.asession() as session:
 
@@ -245,6 +249,7 @@ class MemberAccessState(rx.State):
             self.message = str(e)
             self.error = True
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("member_access.toggle_account", e)
             self.message = "تعذر حفظ حق الاطلاع. أعد المحاولة."
             self.error = True

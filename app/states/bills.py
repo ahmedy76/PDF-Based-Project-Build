@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
@@ -17,6 +17,8 @@ from app.states.auth import (
     visible_account_ids,
 )
 from app.states.debts import money, parse_date
+
+import logging
 
 
 class BillRow(TypedDict):
@@ -70,8 +72,8 @@ class BillState(rx.State):
         try:
             return UUID(raw)
         except (ValueError, TypeError, AttributeError) as e:
-            logging.exception(f"Error: {e}")
-            raise ValueError("الفاتورة غير موجودة أو غير متاحة.") from e
+            logging.exception("Unexpected error")
+            raise ValueError("الفاتورة غير موجودة أو غير متاحة.")
 
     def _guard(self, db, member) -> None:
         if (
@@ -381,7 +383,8 @@ class BillState(rx.State):
             logging.exception("Unexpected error")
             return rx.redirect("/login")
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("bills.load", e)
             self.bills, self.accounts, self.reminders = [], [], []
             self.error = "تعذر تحميل الفواتير والتذكيرات. حاول مجددًا."
 
@@ -441,7 +444,8 @@ class BillState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("bills.save", e)
             self.error = "تعذر حفظ الفاتورة. حاول مجددًا."
 
     @rx.event
@@ -470,7 +474,8 @@ class BillState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("bills.set_paid", e)
             self.error = "تعذر تحديث حالة الفاتورة."
 
     @rx.event
@@ -499,5 +504,6 @@ class BillState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("bills.delete", e)
             self.error = "تعذر حذف الفاتورة."

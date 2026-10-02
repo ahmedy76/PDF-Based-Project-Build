@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 import re
 import secrets
 from datetime import datetime, timezone
@@ -11,6 +11,8 @@ from sqlalchemy import func, select, text
 from sqlalchemy.exc import IntegrityError
 
 from app.models import WaitlistLead
+
+import logging
 
 
 PROBLEMS: tuple[tuple[str, str], ...] = (
@@ -186,7 +188,7 @@ class WaitlistState(rx.State):
             self.error = "تعذر إكمال التسجيل بوسيلة التواصل هذه. تحقق منها أو جرّب وسيلة أخرى."
         except Exception as e:
             logging.exception("Unexpected error")
-            logging.error("Waitlist registration failed (%s)", type(e).__name__)
+            report_unexpected("waitlist.register_interest", e)
             self.error = "تعذر حفظ التسجيل الآن. حاول مجددًا."
 
     @rx.event
@@ -207,7 +209,7 @@ class WaitlistState(rx.State):
             self.error = str(e)
         except Exception as e:
             logging.exception("Unexpected error")
-            logging.error("Waitlist answers failed (%s)", type(e).__name__)
+            report_unexpected("waitlist.save_problems", e)
             self.error = "تعذر حفظ اختياراتك الآن. حاول مجددًا."
 
     @rx.event
@@ -220,7 +222,7 @@ class WaitlistState(rx.State):
                 await db.commit()
         except Exception as e:
             logging.exception("Unexpected error")
-            logging.error("Waitlist share click failed (%s)", type(e).__name__)
+            report_unexpected("waitlist.mark_invite_click", e)
             self.error = (
                 "لم نتمكن من تسجيل نقرة المشاركة. لم نرسل دعوة نيابةً عنك."
             )
@@ -248,5 +250,5 @@ class WaitlistState(rx.State):
             self.error = str(e)
         except Exception as e:
             logging.exception("Unexpected error")
-            logging.error("Waitlist decision failed (%s)", type(e).__name__)
+            report_unexpected("waitlist.choose_founder", e)
             self.error = "تعذر حفظ اختيارك الآن. حاول مجددًا."

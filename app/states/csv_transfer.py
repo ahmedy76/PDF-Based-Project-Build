@@ -2,11 +2,11 @@ import reflex as rx
 
 import csv
 import io
-import logging
+from app.observability import report_unexpected
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
-from uuid import UUID
+from uuid import UUID, uuid5
 
 from sqlalchemy import select
 
@@ -19,6 +19,7 @@ from app.states.auth import (
 )
 from app.states.ledger import LedgerState
 
+import logging
 
 HEADERS: dict[str, tuple[str, ...]] = {
     "accounts": (
@@ -248,11 +249,11 @@ def parse_csv(kind: str, data: bytes) -> list[dict[str, str]]:
         return rows
     except UnicodeError as e:
         logging.exception("Unexpected error")
-        raise ValueError("احفظ الملف بترميز UTF-8 ثم حاول ثانية.") from e
+        raise ValueError("احفظ الملف بترميز UTF-8 ثم حاول ثانية.")
     except csv.Error as e:
         logging.exception("Unexpected error")
         raise ValueError(
-            f"تنسيق CSV غير صحيح قرب الصف {reader.line_num}: {e}"
+            f"تنسيق CSV غير صحيح قرب الصف {reader.line_num}."
         ) from e
 
 
@@ -261,7 +262,7 @@ def money(value: str, positive: bool = True) -> Decimal:
         result = Decimal(value)
     except InvalidOperation as e:
         logging.exception("Unexpected error")
-        raise ValueError("المبلغ غير صالح.") from e
+        raise ValueError("المبلغ غير صالح.")
     if (
         not result.is_finite()
         or result.as_tuple().exponent < -4
@@ -309,6 +310,14 @@ def source_id(row: dict[str, str], key: str = "source_id") -> UUID | None:
         return UUID(raw) if raw else None
     except ValueError as e:
         raise ValueError("معرّف المصدر يجب أن يكون UUID صالحًا أو فارغًا.") from e
+
+
+def tenant_id(
+    source: UUID | None, household: UUID, existing: dict[UUID, object]
+) -> UUID | None:
+    if source is None:
+        return None
+    return source if source in existing else uuid5(household, source.hex)
 
 
 def debt_identity(
@@ -742,18 +751,12 @@ def import_rows(
     account_map = {
         (a.name.casefold(), a.currency): a for a in accounts if a.id in visible
     }
-    account_counts: dict[tuple[str, str], int] = {}
-    for account in accounts:
-        if account.id in visible:
-            key = (account.name.casefold(), account.currency)
-            account_counts[key] = account_counts.get(key, 0) + 1
+    all_account_ids = {a.id: a for a in accounts}
     categories = db.scalars(
         select(m.Category).where(m.Category.household_id == hid)
     ).all()
     category_map = {(c.kind, c.name.casefold()): c for c in categories}
-    account_keys = {
-        (a.name.casefold(), a.currency) for a in accounts if a.id in visible
-    }
+    category_ids = {c.id: c for c in categories}
     category_keys = {(c.kind, c.name.casefold()) for c in categories}
     hidden_keys = {
         (a.name.casefold(), a.currency) for a in accounts if a.id not in visible
@@ -785,6 +788,16 @@ def import_rows(
         else []
     )
     transaction_ids = {t.id: t for t in transactions}
+    all_transaction_ids = (
+        {
+            t.id: t
+            for t in db.scalars(
+                select(m.Transaction).where(m.Transaction.household_id == hid)
+            ).all()
+        }
+        if kind == "transactions" and visible
+        else {}
+    )
     fingerprints = {
         transaction_key(
             t.account_id,
@@ -802,87 +815,102 @@ def import_rows(
             validate_row(kind, row)
             if kind == "accounts":
                 key = (row["name"].casefold(), row["currency"])
-                if key in hidden_keys:
-                    raise ValueError(
-                        "يوجد حساب محجوب بهذا الاسم والعملة؛ لا يمكن الكشف عنه أو استبداله."
-                    )
                 sid = source_id(row)
+                target = tenant_id(sid, hid, all_account_ids)
+                identified = all_account_ids.get(target)
                 matching = [
                     a
                     for a in accounts
-                    if a.id in visible
-                    and (a.name.casefold(), a.currency) == key
+                    if (a.name.casefold(), a.currency) == key
                 ]
-                if sid and any(a.id == sid for a in matching):
-                    skipped += 1
-                    continue
-                if not sid and matching:
-                    skipped += 1
-                    continue
-                db.add(
-                    m.FinancialAccount(
-                        household_id=hid,
-                        created_by_user_id=user.id,
-                        name=row["name"],
-                        account_type=row["account_type"],
-                        currency=row["currency"],
-                        opening_balance=money(row["opening_balance"], False),
-                        opening_date=day(row["opening_date"]),
-                        is_archived=flag(row.get("is_archived", "false")),
-                        **({"id": source_id(row)} if source_id(row) else {}),
+                if key in hidden_keys or (
+                    identified and identified.id not in visible
+                ):
+                    raise ValueError(
+                        "تعذر استيراد الحساب؛ راجع بيانات الحسابات المتاحة."
                     )
+                if identified:
+                    if (
+                        identified.name.casefold(),
+                        identified.currency,
+                    ) != key or (
+                        identified.account_type != row["account_type"]
+                        or identified.opening_balance
+                        != money(row["opening_balance"], False)
+                        or identified.opening_date != day(row["opening_date"])
+                        or identified.is_archived != flag(row["is_archived"])
+                    ):
+                        raise ValueError(
+                            "تعذر استيراد الحساب؛ راجع بيانات الحسابات المتاحة."
+                        )
+                    skipped += 1
+                    continue
+                if matching:
+                    if sid or len(matching) != 1:
+                        raise ValueError(
+                            "تعذر استيراد الحساب؛ راجع بيانات الحسابات المتاحة."
+                        )
+                    skipped += 1
+                    continue
+                if member.role != "owner":
+                    raise ValueError(
+                        "تعذر استيراد الحساب؛ راجع بيانات الحسابات المتاحة."
+                    )
+                new_account = m.FinancialAccount(
+                    household_id=hid,
+                    created_by_user_id=user.id,
+                    name=row["name"],
+                    account_type=row["account_type"],
+                    currency=row["currency"],
+                    opening_balance=money(row["opening_balance"], False),
+                    opening_date=day(row["opening_date"]),
+                    is_archived=flag(row.get("is_archived", "false")),
+                    **({"id": target} if target else {}),
                 )
-                account_keys.add(key)
+                db.add(new_account)
+                accounts.append(new_account)
+                if target:
+                    all_account_ids[target] = new_account
             elif kind == "categories":
                 key = (row["kind"], row["name"].casefold())
-                if key in category_keys:
+                sid = source_id(row)
+                target = tenant_id(sid, hid, category_ids)
+                identified = category_ids.get(target)
+                if identified:
+                    if (
+                        identified.kind,
+                        identified.name.casefold(),
+                    ) != key or identified.is_archived != flag(
+                        row["is_archived"]
+                    ):
+                        raise ValueError("معرّف المصدر لا يطابق بيانات الفئة.")
                     skipped += 1
                     continue
-                db.add(
-                    m.Category(
-                        household_id=hid,
-                        kind=row["kind"],
-                        name=row["name"],
-                        is_archived=flag(row.get("is_archived", "false")),
-                        **({"id": source_id(row)} if source_id(row) else {}),
-                    )
+                if key in category_keys:
+                    if sid:
+                        raise ValueError("معرّف المصدر لا يطابق فئة موجودة.")
+                    skipped += 1
+                    continue
+                category = m.Category(
+                    household_id=hid,
+                    kind=row["kind"],
+                    name=row["name"],
+                    is_archived=flag(row.get("is_archived", "false")),
+                    **({"id": target} if target else {}),
                 )
+                db.add(category)
+                if target:
+                    category_ids[target] = category
                 category_keys.add(key)
             elif kind == "transactions":
-                account_key = (row["account_name"].casefold(), row["currency"])
-                account = account_map.get(account_key)
-                account_sid = source_id(row, "account_source_id")
-                if account_sid:
-                    identified = next(
-                        (a for a in accounts if a.id == account_sid), None
-                    )
-                    if identified is not None:
-                        account = (
-                            identified
-                            if identified.id in visible
-                            and (
-                                identified.name.casefold(),
-                                identified.currency,
-                            )
-                            == account_key
-                            else None
-                        )
-                        if account is None:
-                            raise ValueError(
-                                "معرّف الحساب محجوب أو لا يطابق الاسم والعملة."
-                            )
-                    elif account_counts.get(account_key, 0) != 1:
-                        raise ValueError(
-                            "معرّف الحساب غير موجود والاسم والعملة لا يحددان حسابًا واحدًا ظاهرًا."
-                        )
-                if not account_sid and account_counts.get(account_key, 0) > 1:
-                    raise ValueError(
-                        "يوجد أكثر من حساب ظاهر بهذا الاسم والعملة؛ ميّز أسماء الحسابات قبل الاستيراد."
-                    )
-                if account is None:
-                    raise ValueError(
-                        "الحساب غير موجود أو محجوب/مغلق؛ استورد الحسابات أولًا وتحقق من الاسم والعملة وصلاحية العرض."
-                    )
+                account = resolve_account(
+                    accounts,
+                    visible,
+                    row["account_name"],
+                    row["currency"],
+                    sid=source_id(row, "account_source_id"),
+                    household=hid,
+                )
                 category = category_map.get(
                     (row["kind"], row["category_name"].casefold())
                 )
@@ -902,8 +930,16 @@ def import_rows(
                     row["description"],
                 )
                 sid = source_id(row)
-                if sid in transaction_ids:
-                    existing = transaction_ids[sid]
+                target = tenant_id(sid, hid, all_transaction_ids)
+                if (
+                    target in all_transaction_ids
+                    and target not in transaction_ids
+                ):
+                    raise ValueError(
+                        "المعاملة غير متاحة أو معرّف المصدر غير مطابق."
+                    )
+                if target in transaction_ids:
+                    existing = transaction_ids[target]
                     if (
                         transaction_key(
                             existing.account_id,
@@ -932,14 +968,15 @@ def import_rows(
                     amount=key[3],
                     transaction_date=when,
                     description=row["description"],
-                    **({"id": sid} if sid else {}),
+                    **({"id": target} if target else {}),
                 )
                 db.add(tx)
                 db.flush()
                 ledger._append_transaction_event(db, tx, "created", user.id)
                 fingerprints.add(key)
-                if sid:
-                    transaction_ids[sid] = tx
+                if target:
+                    transaction_ids[target] = tx
+                    all_transaction_ids[target] = tx
             else:
                 category = category_map.get(
                     ("expense", row["category_name"].casefold())
@@ -961,7 +998,7 @@ def import_rows(
                     if not a.is_archived
                 }:
                     raise ValueError(
-                        "عملة الميزانية غير متاحة: يلزم حساب نشط ظاهر بهذه العملة وألا تحتوي عملتها على حساب محجوب."
+                        "عملة الميزانية غير متاحة؛ راجع الحسابات النشطة المتاحة بهذه العملة."
                     )
                 db.add(
                     m.MonthlyCategoryBudget(
@@ -997,10 +1034,10 @@ def resolve_account(
     *,
     active: bool = False,
     sid: UUID | None = None,
+    household: UUID | None = None,
 ):
-    identified = (
-        next((a for a in accounts if a.id == sid), None) if sid else None
-    )
+    ids = {a.id: a for a in accounts}
+    target = tenant_id(sid, household, ids) if sid and household else sid
     matches = [
         a
         for a in accounts
@@ -1008,19 +1045,21 @@ def resolve_account(
         and a.name.casefold() == name.casefold()
         and a.currency == code
         and (not active or not a.is_archived)
-        and (identified is None or a.id == sid)
+        and (target is None or a.id == target)
     ]
     if len(matches) != 1:
         raise ValueError(
-            "الحساب غير موجود أو محجوب/مغلق أو الاسم والعملة غير فريدين؛ راجع الحسابات الظاهرة."
+            "الحساب غير متاح أو الاسم والعملة غير فريدين؛ استورد الحسابات أولًا وراجع الحسابات المتاحة."
         )
     return matches[0]
 
 
-def resolve_debt(debts, row: dict[str, str]):
+def resolve_debt(debts, row: dict[str, str], household: UUID | None = None):
     sid = source_id(row, "debt_source_id")
     key = debt_identity(row, "debt_")
-    by_id = [d for d in debts if d.id == sid] if sid else []
+    ids = {d.id: d for d in debts}
+    target = tenant_id(sid, household, ids) if sid and household else sid
+    by_id = [ids[target]] if target in ids else []
     if by_id:
         if (
             debt_identity(
@@ -1035,6 +1074,10 @@ def resolve_debt(debts, row: dict[str, str]):
         ):
             raise ValueError("معرّف الدين لا يطابق بياناته؛ لن نربطه بسجل آخر.")
         return by_id[0]
+    if sid:
+        raise ValueError(
+            "معرّف الدين غير موجود أو لا يطابق بياناته؛ استورد الديون أولًا."
+        )
     matches = [
         d
         for d in debts
@@ -1098,6 +1141,7 @@ def import_financial_rows(
         try:
             validate_row(kind, row)
             sid = source_id(row) if kind != "debt_installments" else None
+            target = tenant_id(sid, hid, by_id)
             if kind == "transfers":
                 src = resolve_account(
                     accounts,
@@ -1106,6 +1150,7 @@ def import_financial_rows(
                     row["currency"],
                     active=True,
                     sid=source_id(row, "source_account_id"),
+                    household=hid,
                 )
                 dst = resolve_account(
                     accounts,
@@ -1114,6 +1159,7 @@ def import_financial_rows(
                     row["currency"],
                     active=True,
                     sid=source_id(row, "destination_account_id"),
+                    household=hid,
                 )
                 when = day(row["transfer_date"])
                 if src.id == dst.id or when < max(
@@ -1138,8 +1184,8 @@ def import_financial_rows(
                     t.transfer_date,
                     t.note or "",
                 )
-                if sid in by_id:
-                    if fingerprint(by_id[sid]) != key:
+                if target in by_id:
+                    if fingerprint(by_id[target]) != key:
                         raise ValueError("التحويل الموجود بهذا المعرّف مختلف.")
                     skipped += 1
                     continue
@@ -1157,7 +1203,7 @@ def import_financial_rows(
                     amount=key[3],
                     transfer_date=when,
                     note=row["note"] or None,
-                    **({"id": sid} if sid else {}),
+                    **({"id": target} if target else {}),
                 )
             elif kind == "bills":
                 account = resolve_account(
@@ -1166,6 +1212,7 @@ def import_financial_rows(
                     row["account_name"],
                     row["currency"],
                     sid=source_id(row, "account_source_id"),
+                    household=hid,
                 )
                 key = (
                     account.id,
@@ -1189,8 +1236,8 @@ def import_financial_rows(
                     b.remind_days,
                     b.notes or "",
                 )
-                if sid in by_id:
-                    if fingerprint(by_id[sid]) != key:
+                if target in by_id:
+                    if fingerprint(by_id[target]) != key:
                         raise ValueError(
                             "الفاتورة بهذا المعرّف مختلفة؛ لا تُعدّل الفواتير عند الاستيراد."
                         )
@@ -1213,7 +1260,7 @@ def import_financial_rows(
                     paid_on=key[5],
                     remind_days=key[6],
                     notes=row["notes"] or None,
-                    **({"id": sid} if sid else {}),
+                    **({"id": target} if target else {}),
                 )
             elif kind == "debts":
                 key = debt_identity(row)
@@ -1228,7 +1275,9 @@ def import_financial_rows(
                     )
                     == key
                 ]
-                debt = by_id.get(sid) if sid else None
+                debt = by_id.get(target) if target else None
+                if sid and debt is None and candidates:
+                    raise ValueError("معرّف المصدر لا يطابق دينًا موجودًا.")
                 if debt is None and len(candidates) > 1 and not sid:
                     raise ValueError(
                         "عدة ديون تحمل التعريف نفسه؛ استخدم معرّف المصدر دون تخمين."
@@ -1274,7 +1323,7 @@ def import_financial_rows(
                     installment_count=int(row["installment_count"]),
                     note=row["note"] or None,
                     is_archived=False,
-                    **({"id": sid} if sid else {}),
+                    **({"id": target} if target else {}),
                 )
                 db.add(obj)
                 db.flush()
@@ -1298,7 +1347,7 @@ def import_financial_rows(
                 added += 1
                 continue
             elif kind == "debt_installments":
-                debt = resolve_debt(debts, row)
+                debt = resolve_debt(debts, row, hid)
                 entries = schedule(
                     debt.principal, debt.first_due_date, debt.installment_count
                 )
@@ -1323,7 +1372,7 @@ def import_financial_rows(
                 skipped += 1
                 continue
             else:
-                debt = resolve_debt(debts, row)
+                debt = resolve_debt(debts, row, hid)
                 key = (
                     debt.id,
                     money(row["amount"]),
@@ -1338,8 +1387,8 @@ def import_financial_rows(
                     p.note or "",
                     p.voided_at is not None,
                 )
-                if sid in by_id:
-                    if fingerprint(by_id[sid]) != key:
+                if target in by_id:
+                    if fingerprint(by_id[target]) != key:
                         raise ValueError(
                             "الدفعة بهذا المعرّف مختلفة؛ لا يمكن استبدال سجل الدفعات."
                         )
@@ -1365,13 +1414,13 @@ def import_financial_rows(
                     paid_on=key[2],
                     note=row["note"] or None,
                     voided_at=datetime.now(timezone.utc) if key[4] else None,
-                    **({"id": sid} if sid else {}),
+                    **({"id": target} if target else {}),
                 )
                 if not key[4]:
                     paid[debt.id] = paid.get(debt.id, Decimal(0)) + key[1]
             db.add(obj)
-            if sid:
-                by_id[sid] = obj
+            if target:
+                by_id[target] = obj
             seen.add(key)
             added += 1
         except ValueError as e:
@@ -1452,7 +1501,8 @@ class CsvTransferState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("csv_transfer.export_csv", e)
             self.error = "تعذر تصدير البيانات. حاول ثانية."
 
     @rx.event
@@ -1503,7 +1553,8 @@ class CsvTransferState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("csv_transfer.upload_csv", e)
             self.error = "تعذرت قراءة الملف. تأكد من ترميز UTF-8 وصيغة CSV."
 
     @rx.event
@@ -1538,7 +1589,8 @@ class CsvTransferState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("csv_transfer.confirm", e)
             self.error = "لم يُحفظ أي صف. راجع الملف وحاول ثانية."
         finally:
             self.busy = False

@@ -221,6 +221,34 @@ class UserSession(Record, Base):
     user: Mapped["User"] = relationship(viewonly=True, lazy="raise")
 
 
+class AuthenticationAttempt(Record, Base):
+    __tablename__ = "mh_authentication_attempts"
+    __table_args__ = (
+        CheckConstraint(
+            "identifier_digest ~ '^[0-9a-f]{64}$'",
+            name="identifier_sha256_digest",
+        ),
+        CheckConstraint(
+            "attempt_count BETWEEN 1 AND 100",
+            name="bounded_positive_attempt_count",
+        ),
+        Index("ix_mh_authentication_attempts_locked_until", "locked_until"),
+    )
+    # Digest of the normalized login identifier; never store the identifier itself.
+    identifier_digest: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False, deferred=True
+    )
+    attempt_count: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1", nullable=False
+    )
+    window_started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    locked_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), default=None, nullable=True
+    )
+
+
 class Household(Record, Base):
     __tablename__ = "mh_households"
     __table_args__ = (

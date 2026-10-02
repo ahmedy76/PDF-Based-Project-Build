@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 import calendar
 import re
 import secrets
@@ -22,6 +22,8 @@ from app.states.auth import (
     visible_account_ids,
     blocked_budget_currencies,
 )
+
+import logging
 
 
 def next_recurring_date(
@@ -1295,7 +1297,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.load", e)
             self.message = "تعذر تحميل البيانات. أعد المحاولة."
 
     @rx.event
@@ -1382,7 +1385,8 @@ class LedgerState(rx.State):
         except ValueError:
             self.message = "اختر شهرًا صالحًا."
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.set_budget_month", e)
             self.message = "اختر شهرًا صالحًا."
 
     @rx.event
@@ -1639,7 +1643,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.transfer_error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.save_transfer", e)
             self.transfer_error = "تعذر حفظ التحويل. راجع الحقول وحاول مجددًا."
 
     @rx.event
@@ -1836,7 +1841,8 @@ class LedgerState(rx.State):
                 str(e) if isinstance(e, ValueError) else "معرّف معاملة غير صالح."
             )
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.transaction_history", e)
             self.message = "تعذر عرض سجل التعديلات."
 
     @rx.event
@@ -2247,7 +2253,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.save", e)
             self.message = "تعذر الحفظ. راجع الحقول وحاول مجددًا."
 
     @rx.event
@@ -2308,7 +2315,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.toggle_recurrence", e)
             self.message = "تعذر تحديث التكرار."
 
     def _budget_alerts(self, db, hid):
@@ -2491,7 +2499,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.delete", e)
             self.message = "تعذر الحذف."
 
     @rx.event
@@ -2565,7 +2574,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.create_invitation", e)
             self.message = "تعذر إنشاء الدعوة."
 
     @rx.event
@@ -2599,7 +2609,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.revoke_invitation", e)
             self.message = "تعذر إلغاء الدعوة."
 
     @rx.event
@@ -2685,7 +2696,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.accept_invitation", e)
             self.message = "تعذر قبول الدعوة."
 
     @rx.event
@@ -2726,7 +2738,8 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.mark_notifications_read", e)
             self.message = "تعذر تحديث الإشعارات."
 
     @rx.event
@@ -2775,5 +2788,6 @@ class LedgerState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("ledger.save_preferences", e)
             self.message = "تعذر حفظ التفضيلات."

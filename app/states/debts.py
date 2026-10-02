@@ -1,7 +1,7 @@
 import reflex as rx
 
 import calendar
-import logging
+from app.observability import report_unexpected
 import re
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,6 +12,8 @@ from sqlalchemy import delete, func, select
 
 from app import models as m
 from app.states.auth import AuthState
+
+import logging
 
 
 class InstallmentRow(TypedDict):
@@ -65,7 +67,7 @@ def money(raw: str) -> Decimal:
         return value.quantize(Decimal("0.0001"))
     except (InvalidOperation, OverflowError) as e:
         logging.exception("Unexpected error")
-        raise ValueError("أدخل مبلغًا صالحًا بدقة أربع خانات عشرية.") from e
+        raise ValueError("أدخل مبلغًا صالحًا بدقة أربع خانات عشرية.")
 
 
 def parse_date(raw: str, *, past_allowed: bool = True) -> date:
@@ -153,7 +155,7 @@ class DebtState(rx.State):
             return UUID(raw)
         except (ValueError, TypeError, AttributeError) as e:
             logging.exception("Unexpected error")
-            raise ValueError("السجل غير موجود أو غير متاح لهذه الأسرة.") from e
+            raise ValueError("السجل غير موجود أو غير متاح لهذه الأسرة.")
 
     def _guard(self, db, hid: UUID, uid: UUID):
         household = db.scalar(
@@ -504,7 +506,8 @@ class DebtState(rx.State):
             logging.exception("Unexpected error")
             return rx.redirect("/login")
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("debts.load", e)
             self.error = "تعذر تحميل الديون. حاول مجددًا."
 
     @rx.event
@@ -597,7 +600,8 @@ class DebtState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("debts.save_debt", e)
             self.error = "تعذر حفظ الدين. حاول مجددًا."
 
     @rx.event
@@ -629,7 +633,8 @@ class DebtState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("debts.save_payment", e)
             self.error = "تعذر تسجيل الدفعة. حاول مجددًا."
 
     @rx.event
@@ -661,7 +666,8 @@ class DebtState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("debts.confirm_void", e)
             self.error = "تعذر إلغاء الدفعة. حاول مجددًا."
 
     @rx.event
@@ -691,5 +697,6 @@ class DebtState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("debts.set_archived", e)
             self.error = "تعذر تحديث حالة الدين. حاول مجددًا."

@@ -1,6 +1,6 @@
 import reflex as rx
 
-import logging
+from app.observability import report_unexpected
 from datetime import date
 from typing import Any
 from uuid import UUID
@@ -10,6 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from app import models as m
 from app.states.auth import AuthState
+
+import logging
 
 
 class CategoryState(rx.State):
@@ -104,7 +106,8 @@ class CategoryState(rx.State):
             self.message = ""
             return rx.redirect("/login")
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("categories.load", e)
             self.message = "تعذر تحميل الفئات. أعد المحاولة."
 
     @rx.event
@@ -175,7 +178,8 @@ class CategoryState(rx.State):
                 "اسم الفئة مستخدم بالفعل لهذا النوع، حتى إن كانت الفئة مؤرشفة."
             )
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("categories.add", e)
             self.message = "تعذرت إضافة الفئة. أعد المحاولة."
 
     @rx.event
@@ -215,7 +219,8 @@ class CategoryState(rx.State):
                 "اسم الفئة مستخدم بالفعل لهذا النوع، حتى إن كانت الفئة مؤرشفة."
             )
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("categories.rename", e)
             self.message = "تعذر تحديث الفئة. أعد المحاولة."
 
     @rx.event
@@ -268,5 +273,6 @@ class CategoryState(rx.State):
         except ValueError as e:
             self.message = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("categories.confirm_archive", e)
             self.message = "تعذرت أرشفة الفئة. أعد المحاولة."

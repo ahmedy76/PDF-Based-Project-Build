@@ -1,8 +1,9 @@
 import reflex as rx
 
 import hashlib
-import logging
 import re
+
+from app.observability import report_unexpected
 import secrets
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
@@ -10,8 +11,18 @@ from typing import Any
 from uuid import UUID
 
 import bcrypt
-from sqlalchemy import select
+from sqlalchemy import select, text
 from app import models as m
+
+import logging
+
+LOGIN_FAILURE_LIMIT = 5
+LOGIN_WINDOW = timedelta(minutes=15)
+INVALID_CREDENTIALS = "البريد أو كلمة المرور غير صحيحة."
+LOCKED_LOGIN = "محاولات كثيرة. انتظر 15 دقيقة ثم حاول مجددًا."
+DUMMY_PASSWORD_HASH = bcrypt.hashpw(
+    b"unused-login-placeholder", bcrypt.gensalt()
+)
 
 
 def digest(value: str) -> str:
@@ -23,8 +34,9 @@ def now() -> datetime:
 
 
 def require_permission(member, permission: str) -> None:
-    if getattr(member, "role", "owner") != "owner" and not getattr(
-        member, permission, False
+    role = getattr(member, "role", None)
+    if role not in ("owner", "partner") or (
+        role == "partner" and not getattr(member, permission, False)
     ):
         raise ValueError("ليس لديك صلاحية تنفيذ هذه العملية في الأسرة.")
 
@@ -41,6 +53,8 @@ def denied_account_ids(db, household_id, user_id) -> set[UUID]:
 
 
 def visible_account_ids(db, member, accounts) -> set[UUID]:
+    if getattr(member, "role", None) not in ("owner", "partner"):
+        raise ValueError("الحساب غير متاح لك في هذه الأسرة.")
     ids = {account.id for account in accounts}
     if member.role == "owner":
         return ids
@@ -48,15 +62,18 @@ def visible_account_ids(db, member, accounts) -> set[UUID]:
 
 
 def require_account(db, member, account_id: UUID) -> None:
-    if getattr(
-        member, "role", "owner"
-    ) != "owner" and account_id in denied_account_ids(
+    role = getattr(member, "role", None)
+    if role not in ("owner", "partner"):
+        raise ValueError("الحساب غير متاح لك في هذه الأسرة.")
+    if role == "partner" and account_id in denied_account_ids(
         db, member.household_id, member.user_id
     ):
         raise ValueError("الحساب غير متاح لك في هذه الأسرة.")
 
 
 def blocked_budget_currencies(db, member) -> set[str]:
+    if getattr(member, "role", None) not in ("owner", "partner"):
+        raise ValueError("ليس لديك صلاحية تنفيذ هذه العملية في الأسرة.")
     if member.role == "owner":
         return set()
     return set(
@@ -86,15 +103,13 @@ class AuthState(rx.State):
         "", name="mh_session", secure=True, same_site="strict", max_age=86400
     )
     selected_household: str = rx.Cookie(
-        "", name="mh_household", same_site="strict"
+        "", name="mh_household", secure=True, same_site="strict", max_age=86400
     )
     authenticated: bool = False
     name: str = ""
     email: str = ""
     error: str = ""
     pending_invite: str = rx.SessionStorage("")
-    _attempts: int = 0
-    _retry_at: float = 0.0
 
     def _identity(self, db):
         session = db.scalar(
@@ -140,7 +155,7 @@ class AuthState(rx.State):
         )
         if membership is None and memberships:
             membership = memberships[0]
-        if membership is None:
+        if membership is None or membership.role not in ("owner", "partner"):
             raise PermissionError("لا توجد عضوية أسرة نشطة.")
         self.selected_household = str(membership.household_id)
         return user, membership
@@ -169,6 +184,65 @@ class AuthState(rx.State):
         self.authenticated = True
         self.name, self.email = user.display_name, user.email
         self.error = ""
+
+    def _login_attempt(self, db, email: str, password: bytes) -> str:
+        identifier_hash = digest(email)
+        lock_key = int.from_bytes(
+            bytes.fromhex(identifier_hash)[:8], "big", signed=True
+        )
+        db.execute(
+            text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_key}
+        )
+        attempt = db.scalar(
+            select(m.AuthenticationAttempt).where(
+                m.AuthenticationAttempt.identifier_digest == identifier_hash
+            )
+        )
+        clock = now()
+        if (
+            attempt is not None
+            and attempt.locked_until is not None
+            and attempt.locked_until > clock
+        ):
+            db.commit()
+            return "locked"
+        user = db.scalar(
+            select(m.User).where(
+                m.User.email == email, m.User.status == "active"
+            )
+        )
+        verified = bcrypt.checkpw(
+            password,
+            user.password_hash.encode() if user else DUMMY_PASSWORD_HASH,
+        )
+        if user is not None and verified:
+            if attempt is not None:
+                db.delete(attempt)
+            self._new_session(db, user)
+            return "success"
+        if attempt is None:
+            attempt = m.AuthenticationAttempt(
+                identifier_digest=identifier_hash,
+                attempt_count=1,
+                window_started_at=clock,
+            )
+            db.add(attempt)
+        elif (
+            attempt.locked_until is not None
+            or clock >= attempt.window_started_at + LOGIN_WINDOW
+        ):
+            attempt.window_started_at = clock
+            attempt.attempt_count = 1
+            attempt.locked_until = None
+        else:
+            attempt.attempt_count = min(
+                attempt.attempt_count + 1, LOGIN_FAILURE_LIMIT
+            )
+        if attempt.attempt_count >= LOGIN_FAILURE_LIMIT:
+            attempt.locked_until = clock + LOGIN_WINDOW
+        outcome = "locked" if attempt.locked_until is not None else "invalid"
+        db.commit()
+        return outcome
 
     @rx.event
     def register(self, data: dict[str, Any]):
@@ -248,41 +322,45 @@ class AuthState(rx.State):
         except ValueError as e:
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("auth.register", e)
             self.error = "تعذر إنشاء الحساب. حاول مجددًا."
 
     @rx.event
     def login(self, data: dict[str, Any]):
+        self.error = ""
+        raw_email = str(data.get("email", ""))
+        raw_password = str(data.get("password", ""))
+        if len(raw_email) > 320 or len(raw_password) > 72:
+            self.error = INVALID_CREDENTIALS
+            return
+        email = raw_email.strip().lower()
+        if (
+            not email
+            or len(email) > 320
+            or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email)
+        ):
+            self.error = INVALID_CREDENTIALS
+            return
+        password = raw_password.encode()
+        if len(password) > 72:
+            self.error = INVALID_CREDENTIALS
+            return
         try:
-            if now().timestamp() < self._retry_at:
-                raise ValueError("محاولات كثيرة. انتظر دقيقة ثم حاول مجددًا.")
-            email = str(data.get("email", "")).strip().lower()
-            password = str(data.get("password", "")).encode()
-            self._attempts += 1
-            if self._attempts >= 5:
-                self._retry_at = now().timestamp() + 60
-                self._attempts = 0
             with rx.session() as db:
-                user = db.scalar(
-                    select(m.User).where(
-                        m.User.email == email, m.User.status == "active"
-                    )
+                outcome = self._login_attempt(db, email, password)
+            if outcome == "success":
+                return rx.redirect(
+                    "/accept-invitation"
+                    if self.pending_invite
+                    else "/dashboard"
                 )
-                if (
-                    not user
-                    or len(password) > 72
-                    or not bcrypt.checkpw(password, user.password_hash.encode())
-                ):
-                    raise ValueError("البريد أو كلمة المرور غير صحيحة.")
-                self._new_session(db, user)
-            self._attempts = 0
-            return rx.redirect(
-                "/accept-invitation" if self.pending_invite else "/dashboard"
+            self.error = (
+                LOCKED_LOGIN if outcome == "locked" else INVALID_CREDENTIALS
             )
-        except ValueError as e:
-            self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("auth.login", e)
             self.error = "تعذر تسجيل الدخول. حاول مجددًا."
 
     @rx.event
@@ -299,7 +377,8 @@ class AuthState(rx.State):
                     record.revoked_at = now()
                     db.commit()
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("auth.logout", e)
             self.error = "تعذر إلغاء الجلسة. حاول مرة أخرى."
             return
         self.token = ""
@@ -327,5 +406,6 @@ class AuthState(rx.State):
                 self.error = ""
                 return rx.redirect("/login")
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("auth.prepare_invitation", e)
             return rx.redirect("/login")

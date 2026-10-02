@@ -1,7 +1,7 @@
 import reflex as rx
 
 import base64
-import logging
+from app.observability import report_unexpected
 import re
 from pathlib import PurePath
 from uuid import UUID
@@ -11,6 +11,7 @@ from sqlalchemy import select
 from app import models as m
 from app.states.auth import AuthState, require_account, require_permission
 
+import logging
 
 MAX_RECEIPT_BYTES = 5 * 1024 * 1024
 ALLOWED_EXTENSIONS = {
@@ -98,7 +99,7 @@ class ReceiptState(rx.State):
             tid = UUID(transaction_id)
         except (ValueError, TypeError, AttributeError) as e:
             logging.exception("Unexpected error")
-            raise ValueError("المعاملة غير متاحة.") from e
+            raise ValueError("المعاملة غير متاحة.")
         transaction = db.scalar(
             select(m.Transaction).where(
                 m.Transaction.id == tid,
@@ -161,7 +162,8 @@ class ReceiptState(rx.State):
             self._clear_receipt()
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("receipts.open", e)
             self._clear_receipt()
             self.error = "تعذر فتح الإيصال. حاول مجددًا."
         finally:
@@ -247,7 +249,8 @@ class ReceiptState(rx.State):
             self._clear_receipt()
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("receipts.upload", e)
             self._clear_receipt()
             self.error = "تعذر حفظ الإيصال. حاول مجددًا."
         finally:
@@ -294,7 +297,8 @@ class ReceiptState(rx.State):
             self._clear_receipt()
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("receipts.delete", e)
             self._clear_receipt()
             self.error = "تعذر حذف الإيصال. حاول مجددًا."
         finally:
@@ -344,7 +348,8 @@ class ReceiptState(rx.State):
             self._clear_receipt()
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("receipts.preview", e)
             self._clear_receipt()
             self.error = "تعذرت معاينة الإيصال. حاول مجددًا."
         finally:
@@ -365,6 +370,7 @@ class ReceiptState(rx.State):
             self._clear_receipt()
             self.error = str(e)
         except Exception as e:
-            logging.exception(f"Error: {e}")
+            logging.exception("Unexpected error")
+            report_unexpected("receipts.download", e)
             self._clear_receipt()
             self.error = "تعذر تنزيل الإيصال. حاول مجددًا."

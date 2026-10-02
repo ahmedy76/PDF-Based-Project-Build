@@ -5,7 +5,7 @@ from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
-from uuid import uuid4
+from uuid import uuid4, uuid5
 
 from app.states.csv_transfer import (
     HEADERS,
@@ -16,6 +16,7 @@ from app.states.csv_transfer import (
     money,
     parse_csv,
     safe_cell,
+    tenant_id,
     transfer_rows,
     validate_row,
 )
@@ -88,6 +89,57 @@ class CsvTransferTests(unittest.TestCase):
                 parse_csv("categories", data)[0]["name"], payload.strip()
             )
 
+    def test_source_references_are_tenant_local_and_repeatable(self):
+        first, second, source = uuid4(), uuid4(), uuid4()
+        self.assertEqual(tenant_id(source, first, {}), uuid5(first, source.hex))
+        self.assertNotEqual(tenant_id(source, first, {}), source)
+        self.assertNotEqual(
+            tenant_id(source, first, {}), tenant_id(source, second, {})
+        )
+        self.assertEqual(tenant_id(source, first, {source: object()}), source)
+
+    def test_hidden_account_import_is_generic_and_cannot_duplicate(self):
+        hid, uid = uuid4(), uuid4()
+        hidden = SimpleNamespace(id=uuid4(), name="خاص", currency="SAR")
+        row = dict(zip(HEADERS["accounts"], SAMPLES["accounts"]))
+        row.update(_line="2", name="خاص", source_id="")
+        db = Mock()
+        db.scalars.return_value.all.side_effect = [[hidden], []]
+        with patch(
+            "app.states.csv_transfer.visible_account_ids", return_value=set()
+        ):
+            with self.assertRaises(ValueError) as error:
+                import_rows(
+                    db,
+                    SimpleNamespace(id=uid),
+                    SimpleNamespace(
+                        household_id=hid, user_id=uid, role="partner"
+                    ),
+                    "accounts",
+                    [row],
+                    Mock(),
+                )
+        self.assertNotIn("محجوب", str(error.exception))
+        absent_db = Mock()
+        absent_db.scalars.return_value.all.side_effect = [[], []]
+        with patch(
+            "app.states.csv_transfer.visible_account_ids", return_value=set()
+        ):
+            with self.assertRaises(ValueError) as absent_error:
+                import_rows(
+                    absent_db,
+                    SimpleNamespace(id=uid),
+                    SimpleNamespace(
+                        household_id=hid, user_id=uid, role="partner"
+                    ),
+                    "accounts",
+                    [row],
+                    Mock(),
+                )
+        self.assertEqual(str(error.exception), str(absent_error.exception))
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
     def test_reimport_category_skips_duplicate(self):
         hid, uid = uuid4(), uuid4()
         member = SimpleNamespace(household_id=hid, role="owner", user_id=uid)
@@ -118,7 +170,12 @@ class CsvTransferTests(unittest.TestCase):
         )
         member = SimpleNamespace(household_id=hid, user_id=uid, role="owner")
         db = Mock()
-        db.scalars.return_value.all.side_effect = [[account], [category], []]
+        db.scalars.return_value.all.side_effect = [
+            [account],
+            [category],
+            [],
+            [],
+        ]
         ledger = Mock()
         row = {
             "_line": "2",
@@ -148,6 +205,54 @@ class CsvTransferTests(unittest.TestCase):
         ledger._append_transaction_event.assert_called_once()
         ledger._budget_alerts.assert_called_once()
         db.commit.assert_called_once()
+
+    def test_distinct_source_ids_keep_identical_transactions_distinct(self):
+        hid, uid = uuid4(), uuid4()
+        account = SimpleNamespace(
+            id=uuid4(),
+            name="محفظة",
+            currency="SAR",
+            opening_date=date(2020, 1, 1),
+        )
+        category = SimpleNamespace(id=uuid4(), kind="expense", name="طعام")
+        db = Mock()
+        db.scalars.return_value.all.side_effect = [
+            [account],
+            [category],
+            [],
+            [],
+        ]
+        ledger = Mock()
+        row = dict(zip(HEADERS["transactions"], SAMPLES["transactions"]))
+        row.update(
+            _line="2",
+            account_name="محفظة",
+            category_name="طعام",
+            transaction_date="2020-01-02",
+            source_id=str(uuid4()),
+        )
+        with patch(
+            "app.states.csv_transfer.visible_account_ids",
+            return_value={account.id},
+        ):
+            self.assertEqual(
+                import_rows(
+                    db,
+                    SimpleNamespace(id=uid),
+                    SimpleNamespace(
+                        household_id=hid, user_id=uid, role="owner"
+                    ),
+                    "transactions",
+                    [row, dict(row, source_id=str(uuid4()))],
+                    ledger,
+                ),
+                (2, 0),
+            )
+        self.assertEqual(ledger._append_transaction_event.call_count, 2)
+        self.assertNotEqual(
+            db.add.call_args_list[0].args[0].id,
+            db.add.call_args_list[1].args[0].id,
+        )
 
     def test_missing_account_rolls_back_before_commit(self):
         hid, uid = uuid4(), uuid4()
@@ -222,6 +327,38 @@ class CsvTransferTests(unittest.TestCase):
         ]
         return db
 
+    def test_source_account_reference_never_falls_back_by_name(self):
+        hid, uid = uuid4(), uuid4()
+        account = SimpleNamespace(
+            id=uuid4(),
+            name="بيت",
+            currency="SAR",
+            opening_date=date(2020, 1, 1),
+            is_archived=False,
+        )
+        row = dict(zip(HEADERS["bills"], SAMPLES["bills"]))
+        row.update(
+            _line="2", account_name="بيت", account_source_id=str(uuid4())
+        )
+        db = self.financial_db([account], [], [])
+        with patch(
+            "app.states.csv_transfer.visible_account_ids",
+            return_value={account.id},
+        ):
+            with self.assertRaisesRegex(ValueError, "الصف 2"):
+                import_rows(
+                    db,
+                    SimpleNamespace(id=uid),
+                    SimpleNamespace(
+                        household_id=hid, user_id=uid, role="owner"
+                    ),
+                    "bills",
+                    [row],
+                    Mock(),
+                )
+        db.add.assert_not_called()
+        db.commit.assert_not_called()
+
     def test_bill_import_and_visibility(self):
         hid, uid = uuid4(), uuid4()
         account = SimpleNamespace(
@@ -265,6 +402,37 @@ class CsvTransferTests(unittest.TestCase):
                 db, SimpleNamespace(id=uid), member, "bills", [row], Mock()
             )
         db.commit.assert_not_called()
+
+    def test_distinct_sourced_bills_are_not_collapsed(self):
+        hid, uid = uuid4(), uuid4()
+        account = SimpleNamespace(
+            id=uuid4(),
+            name="بيت",
+            currency="SAR",
+            opening_date=date(2020, 1, 1),
+            is_archived=False,
+        )
+        row = dict(zip(HEADERS["bills"], SAMPLES["bills"]))
+        row.update(_line="2", account_name="بيت", source_id=str(uuid4()))
+        db = self.financial_db([account], [], [])
+        with patch(
+            "app.states.csv_transfer.visible_account_ids",
+            return_value={account.id},
+        ):
+            self.assertEqual(
+                import_rows(
+                    db,
+                    SimpleNamespace(id=uid),
+                    SimpleNamespace(
+                        household_id=hid, user_id=uid, role="owner"
+                    ),
+                    "bills",
+                    [row, dict(row, source_id=str(uuid4()))],
+                    Mock(),
+                ),
+                (2, 0),
+            )
+        self.assertEqual(db.add.call_count, 2)
 
     def test_schedule_verification_and_payment_limits(self):
         hid, uid = uuid4(), uuid4()
