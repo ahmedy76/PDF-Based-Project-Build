@@ -1,11 +1,76 @@
 import reflex as rx
 
-from app.states.receipts import ReceiptState as R
+from app.states.receipts import (
+    MAX_RECEIPT_BYTES,
+    PHOTO_UPLOAD_ID,
+    UPLOAD_ID,
+    ReceiptState as R,
+)
 
-
-UPLOAD_ID = "transaction_receipt"
 BUTTON = "inline-flex items-center justify-center gap-2 rounded-xl bg-[#62704b] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#4f5e3c] disabled:opacity-50"
 SECONDARY = "inline-flex items-center justify-center gap-2 rounded-xl border border-[#ddd9cd] bg-[#fffdf8] px-4 py-2.5 text-sm font-semibold text-[#27394a] hover:bg-[#eeece2] disabled:opacity-50"
+
+
+def photo_picker() -> rx.Component:
+    return rx.el.div(
+        rx.upload.root(
+            rx.icon("camera", class_name="mx-auto mb-3 h-8 w-8 text-[#62704b]"),
+            rx.el.p(
+                "التقاط صورة أو اختيارها",
+                class_name="text-base font-bold text-[#465344]",
+            ),
+            rx.el.p(
+                "قد يتيح متصفح الهاتف الكاميرا، أو يمكنك اختيار صورة من المعرض.",
+                class_name="mt-2 text-sm leading-6 text-[#7c8178]",
+            ),
+            id=PHOTO_UPLOAD_ID,
+            multiple=False,
+            max_files=1,
+            max_size=MAX_RECEIPT_BYTES,
+            accept={
+                "image/png": [".png"],
+                "image/jpeg": [".jpg", ".jpeg"],
+                "image/webp": [".webp"],
+            },
+            disabled=R.loading | (R.household_id == ""),
+            aria_label="التقاط صورة أو اختيارها",
+            class_name="block min-h-36 w-full cursor-pointer rounded-xl border-2 border-dashed border-[#62704b] bg-[#f6f4ec] p-5 text-center transition-colors hover:bg-[#edf0e5] focus-visible:outline-2 focus-visible:outline-[#62704b]",
+        ),
+        rx.foreach(
+            rx.selected_files(PHOTO_UPLOAD_ID),
+            lambda name: rx.el.p(
+                f"الصورة المختارة: {name}",
+                class_name="mt-2 break-all text-sm font-semibold text-[#465344]",
+            ),
+        ),
+        rx.cond(
+            rx.selected_files(PHOTO_UPLOAD_ID).length() > 0,
+            rx.el.p(
+                "الصورة لم تُحفظ بعد. اضغط حفظ الصورة لإرفاقها بالمعاملة.",
+                role="status",
+                class_name="mt-2 text-sm leading-6 text-[#62704b]",
+            ),
+        ),
+        rx.el.p(
+            "PNG، JPG / JPEG أو WEBP · صورة واحدة بحد أقصى 5 ميغابايت.",
+            class_name="my-3 text-xs leading-6 text-[#7c8178]",
+        ),
+        rx.el.button(
+            rx.icon("save", class_name="h-4 w-4"),
+            rx.cond(
+                R.filename != "", "حفظ الصورة بدل الإيصال الحالي", "حفظ الصورة"
+            ),
+            type="button",
+            on_click=R.upload_receipt(
+                rx.upload_files(upload_id=PHOTO_UPLOAD_ID)
+            ),
+            disabled=R.loading
+            | (R.household_id == "")
+            | (rx.selected_files(PHOTO_UPLOAD_ID).length() != 1),
+            class_name="inline-flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-[#62704b] px-4 py-2.5 text-sm font-bold text-white hover:bg-[#4f5e3c] disabled:opacity-50",
+        ),
+        class_name="mb-5",
+    )
 
 
 def receipt_modal() -> rx.Component:
@@ -136,18 +201,26 @@ def receipt_modal() -> rx.Component:
                             ),
                             class_name="mb-3 font-bold text-[#27394a]",
                         ),
+                        photo_picker(),
+                        rx.el.p(
+                            "أو اختر لقطة شاشة / ملفًا",
+                            class_name="mb-3 text-sm font-bold text-[#27394a]",
+                        ),
                         rx.upload.root(
                             rx.icon(
                                 "upload",
                                 class_name="mx-auto mb-2 h-6 w-6 text-[#62704b]",
                             ),
                             rx.el.p(
-                                "اضغط لاختيار ملف أو أسقطه هنا",
+                                "اختيار لقطة شاشة أو ملف PDF",
                                 class_name="text-sm font-semibold text-[#465344]",
                             ),
                             id=UPLOAD_ID,
                             multiple=False,
                             max_files=1,
+                            max_size=MAX_RECEIPT_BYTES,
+                            disabled=R.loading | (R.household_id == ""),
+                            aria_label="اختيار لقطة شاشة أو ملف إيصال",
                             accept={
                                 "image/png": [".png"],
                                 "image/jpeg": [".jpg", ".jpeg"],
@@ -163,30 +236,46 @@ def receipt_modal() -> rx.Component:
                                 class_name="mt-2 break-all text-sm text-[#465344]",
                             ),
                         ),
+                        rx.cond(
+                            rx.selected_files(UPLOAD_ID).length() > 0,
+                            rx.el.p(
+                                "الملف لم يُحفظ بعد. اضغط حفظ الملف لإرفاقه بالمعاملة.",
+                                role="status",
+                                class_name="mt-2 text-sm leading-6 text-[#62704b]",
+                            ),
+                        ),
                         rx.el.p(
-                            "PNG، JPG، WEBP أو PDF · ملف واحد بحد أقصى 5 ميغابايت. ملفات PDF متاحة للتنزيل فقط.",
+                            "PNG، JPG / JPEG، WEBP أو PDF · ملف واحد بحد أقصى 5 ميغابايت. ملفات PDF متاحة للتنزيل فقط.",
                             class_name="my-3 text-xs leading-6 text-[#7c8178]",
                         ),
                         rx.el.button(
                             rx.icon("upload", class_name="h-4 w-4"),
                             rx.cond(
                                 R.filename != "",
-                                "حفظ الإيصال البديل",
-                                "رفع الإيصال",
+                                "حفظ الملف بدل الإيصال الحالي",
+                                "حفظ الملف",
                             ),
+                            type="button",
                             on_click=R.upload_receipt(
                                 rx.upload_files(upload_id=UPLOAD_ID)
                             ),
-                            disabled=R.loading | (R.household_id == ""),
+                            disabled=R.loading
+                            | (R.household_id == "")
+                            | (rx.selected_files(UPLOAD_ID).length() != 1),
                             class_name=BUTTON,
+                        ),
+                        rx.el.p(
+                            "مرفق واحد لكل معاملة؛ الحفظ من أي خيار يستبدل الإيصال الحالي ولا يقرأ محتواه أو يغيّر بيانات المعاملة.",
+                            class_name="mt-3 text-xs leading-6 text-[#7c8178]",
                         ),
                         class_name="mt-5 border-t border-[#e2ded2] pt-5",
                     ),
                 ),
                 role="dialog",
+                dir="rtl",
                 aria_modal=True,
                 aria_label="إيصال المعاملة",
-                class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-5 md:p-7",
+                class_name="max-h-[90dvh] w-full max-w-lg overflow-y-auto rounded-2xl bg-[#fffdf8] p-5 font-['Tajawal'] md:p-7",
             ),
             class_name="fixed inset-0 z-50 flex items-center justify-center bg-[#243747]/40 p-4",
         ),

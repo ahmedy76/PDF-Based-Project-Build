@@ -8,6 +8,8 @@ from uuid import uuid4
 from app import models as m
 from app.states.receipts import (
     MAX_RECEIPT_BYTES,
+    PHOTO_UPLOAD_ID,
+    UPLOAD_ID,
     ReceiptState,
     validate_receipt,
 )
@@ -187,6 +189,146 @@ class ReceiptEventTests(unittest.IsolatedAsyncioTestCase):
             self.db.delete.assert_called_once_with(self.receipt)
             self.assertEqual(self.db.commit.call_count, 3)
             self.assertEqual(self.state.filename, "")
+
+    async def test_screenshot_png_upload_and_replacement_clear_both_pickers(
+        self,
+    ):
+        screenshot = SimpleNamespace(
+            name="لقطة شاشة.png",
+            content_type="image/png",
+            read=AsyncMock(return_value=PNG),
+        )
+        replacement_data = PNG + b"replacement"
+        replacement = SimpleNamespace(
+            name="لقطة جديدة.png",
+            content_type="image/png",
+            read=AsyncMock(return_value=replacement_data),
+        )
+        with (
+            patch.object(
+                ReceiptState,
+                "get_state",
+                new_callable=AsyncMock,
+                return_value=self.auth,
+            ),
+            patch("app.states.receipts.rx.asession", return_value=self.context),
+            patch("app.states.receipts.rx.clear_selected_files") as clear,
+        ):
+            await self.run_event(ReceiptState.upload_receipt, [screenshot])
+            self.receipt = self.db.add.call_args.args[0]
+            self.assertEqual(self.receipt.content, PNG)
+            self.assertEqual(self.receipt.mime_type, "image/png")
+            self.assertEqual(self.state.filename, "لقطة شاشة.png")
+            self.assertEqual(
+                [call.args[0] for call in clear.call_args_list],
+                [UPLOAD_ID, PHOTO_UPLOAD_ID],
+            )
+            clear.reset_mock()
+            self.state.preview_uri = "previous-preview"
+            await self.run_event(ReceiptState.upload_receipt, [replacement])
+            self.assertEqual(self.db.add.call_count, 1)
+            self.assertEqual(self.db.commit.call_count, 2)
+            self.assertEqual(self.receipt.content, replacement_data)
+            self.assertEqual(self.receipt.filename, "لقطة جديدة.png")
+            self.assertEqual(self.receipt.size_bytes, len(replacement_data))
+            self.assertEqual(self.state.preview_uri, "")
+            self.assertEqual(self.state.mime_type, "image/png")
+            self.assertEqual(
+                [call.args[0] for call in clear.call_args_list],
+                [UPLOAD_ID, PHOTO_UPLOAD_ID],
+            )
+            screenshot.read.assert_awaited_once_with(MAX_RECEIPT_BYTES + 1)
+            replacement.read.assert_awaited_once_with(MAX_RECEIPT_BYTES + 1)
+
+    async def test_modal_open_and_close_clear_both_pickers(self):
+        self.assertNotEqual(UPLOAD_ID, PHOTO_UPLOAD_ID)
+        with (
+            patch.object(
+                ReceiptState,
+                "get_state",
+                new_callable=AsyncMock,
+                return_value=self.auth,
+            ),
+            patch("app.states.receipts.rx.asession", return_value=self.context),
+            patch("app.states.receipts.rx.clear_selected_files") as clear,
+        ):
+            await self.run_event(ReceiptState.open_receipt, str(self.tid))
+            self.assertEqual(
+                [call.args[0] for call in clear.call_args_list],
+                [UPLOAD_ID, PHOTO_UPLOAD_ID],
+            )
+            clear.reset_mock()
+            events = ReceiptState.close_receipt.fn(self.state)
+            self.assertEqual(len(events), 2)
+            self.assertEqual(
+                [call.args[0] for call in clear.call_args_list],
+                [UPLOAD_ID, PHOTO_UPLOAD_ID],
+            )
+            self.assertEqual(self.state.transaction_id, "")
+            self.assertEqual(self.state.household_id, "")
+            self.assertFalse(self.state.can_manage)
+
+    async def test_screenshot_denied_before_read_for_permission_account_or_household(
+        self,
+    ):
+        for restriction in ("permission", "account", "household"):
+            with self.subTest(restriction=restriction):
+                self.db.add.reset_mock()
+                self.db.commit.reset_mock()
+                self.member.role = (
+                    "owner" if restriction == "household" else "partner"
+                )
+                self.member.can_add_transactions = restriction != "permission"
+                self.member.household_id = (
+                    uuid4() if restriction == "household" else self.hid
+                )
+                self.db.scalars.return_value.all.return_value = (
+                    [self.aid] if restriction == "account" else []
+                )
+                file = SimpleNamespace(
+                    name="screenshot.png",
+                    content_type="image/png",
+                    read=AsyncMock(return_value=PNG),
+                )
+                with (
+                    patch.object(
+                        ReceiptState,
+                        "get_state",
+                        new_callable=AsyncMock,
+                        return_value=self.auth,
+                    ),
+                    patch(
+                        "app.states.receipts.rx.asession",
+                        return_value=self.context,
+                    ),
+                    patch(
+                        "app.states.receipts.rx.clear_selected_files"
+                    ) as clear,
+                ):
+                    await self.run_event(ReceiptState.upload_receipt, [file])
+                self.assertNotEqual(self.state.error, "")
+                self.assertFalse(self.state.loading)
+                file.read.assert_not_awaited()
+                self.db.add.assert_not_called()
+                self.db.commit.assert_not_called()
+                clear.assert_not_called()
+
+    async def test_empty_selection_does_not_save_or_clear_pickers(self):
+        with (
+            patch.object(
+                ReceiptState,
+                "get_state",
+                new_callable=AsyncMock,
+                return_value=self.auth,
+            ),
+            patch("app.states.receipts.rx.asession", return_value=self.context),
+            patch("app.states.receipts.rx.clear_selected_files") as clear,
+        ):
+            await self.run_event(ReceiptState.upload_receipt, [])
+        self.assertIn("واحدًا", self.state.error)
+        self.assertFalse(self.state.loading)
+        self.db.commit.assert_not_called()
+        clear.assert_not_called()
 
     async def test_invalid_upload_keeps_database_unchanged(self):
         file = SimpleNamespace(

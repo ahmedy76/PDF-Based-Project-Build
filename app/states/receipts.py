@@ -13,6 +13,8 @@ from app.states.auth import AuthState, require_account, require_permission
 
 import logging
 
+UPLOAD_ID = "transaction_receipt"
+PHOTO_UPLOAD_ID = "transaction_receipt_photo"
 MAX_RECEIPT_BYTES = 5 * 1024 * 1024
 ALLOWED_EXTENSIONS = {
     ".png": "image/png",
@@ -115,14 +117,18 @@ class ReceiptState(rx.State):
     @rx.event
     def close_receipt(self):
         self._close()
-        return rx.clear_selected_files("transaction_receipt")
+        return [
+            rx.clear_selected_files(UPLOAD_ID),
+            rx.clear_selected_files(PHOTO_UPLOAD_ID),
+        ]
 
     @rx.event
     async def open_receipt(self, transaction_id: str):
         self._close()
         self.transaction_id = transaction_id
         self.loading = True
-        yield rx.clear_selected_files("transaction_receipt")
+        yield rx.clear_selected_files(UPLOAD_ID)
+        yield rx.clear_selected_files(PHOTO_UPLOAD_ID)
         try:
             auth = await self.get_state(AuthState)
 
@@ -243,7 +249,8 @@ class ReceiptState(rx.State):
                     len(data),
                 )
                 self.message = "تم حفظ الإيصال بأمان."
-            yield rx.clear_selected_files("transaction_receipt")
+            yield rx.clear_selected_files(UPLOAD_ID)
+            yield rx.clear_selected_files(PHOTO_UPLOAD_ID)
         except (ValueError, PermissionError) as e:
             logging.exception("Unexpected error")
             self._clear_receipt()
