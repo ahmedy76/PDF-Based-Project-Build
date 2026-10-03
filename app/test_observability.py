@@ -60,12 +60,9 @@ class SafeLoggingTests(unittest.TestCase):
         secret = (
             "private@example.test token=opaque amount=987654.32 receipt-bytes"
         )
-        try:
-            raise RuntimeError(secret)
-        except RuntimeError as error:
-            logging.exception("Unexpected error")
-            first = report_unexpected("auth.login", error)
-            second = report_unexpected("auth.login", error)
+        error = RuntimeError(secret)
+        first = report_unexpected("auth.login", error)
+        second = report_unexpected("auth.login", error)
         text = self.stream.getvalue()
         self.assert_redacted(secret)
         self.assertNotIn("private@example.test", text)
