@@ -1,5 +1,5 @@
 
-reflex==0.9.6
+reflex[db]==0.9.6
 pypdf
 xy[reflex]==0.0.7
 psycopg[binary]>=3.1.8
