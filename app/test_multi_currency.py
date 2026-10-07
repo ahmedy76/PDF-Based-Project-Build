@@ -88,6 +88,7 @@ class MultiCurrencyTests(unittest.TestCase):
 
     def test_balances_spending_reports_and_archives_are_separate(self):
         state = LedgerState()
+        state.period = "current"
         state.budget_month = self.today.strftime("%Y-%m")
         self.load(state)
         self.assertEqual(state.view_currencies, ["SAR", "USD"])
@@ -122,6 +123,7 @@ class MultiCurrencyTests(unittest.TestCase):
     def test_archived_only_currency_still_available_for_history(self):
         self.accounts[1].is_archived = True
         state = LedgerState()
+        state.period = "current"
         self.load(state)
         self.assertEqual(state.view_currencies, ["SAR", "USD"])
         self.assertEqual(
@@ -199,7 +201,7 @@ class AccountCurrencyProtectionTests(unittest.IsolatedAsyncioTestCase):
         )
         user, member = (
             SimpleNamespace(id=uuid4()),
-            SimpleNamespace(household_id=uuid4()),
+            SimpleNamespace(household_id=uuid4(), role="owner"),
         )
         auth = Mock()
         auth._household.return_value = (user, member)
