@@ -226,6 +226,23 @@ class ManagedSavingsGoalsTests(unittest.TestCase):
             (funded["amount"], funded["remaining"], funded["status"]),
             ("150.0000", "0.0000", "مكتمل"),
         )
+        self.assertEqual(funded["target"], "100.0000")
+        self.assertEqual(funded["target_amount"], "100.0000")
+        self.assertNotEqual(funded["target_amount"], funded["amount"])
+        GoalState.open_goal.fn(state, str(emergency.id))
+        self.assertEqual(
+            (state.editor, state.edit_id), ("goal", str(emergency.id))
+        )
+        self.assertEqual(
+            state.draft,
+            {
+                "name": "صندوق الطوارئ",
+                "description": "احتياط الأسرة",
+                "target_amount": "100.0000",
+                "target_date": "",
+            },
+        )
+        self.assertEqual(state.error, "")
         self.assertEqual(
             (funded["percent"], funded["progress"]), ("150.0", 100.0)
         )

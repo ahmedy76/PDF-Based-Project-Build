@@ -239,6 +239,7 @@ class GoalState(rx.State):
                 "description": goal.description or "",
                 "amount": f"{funded:,.4f}",
                 "target": f"{target:,.4f}",
+                "target_amount": f"{target:.4f}",
                 "remaining": f"{remaining:,.4f}",
                 "date": goal.target_date.isoformat()
                 if goal.target_date
