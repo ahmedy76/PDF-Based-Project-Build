@@ -1,5 +1,6 @@
 import reflex as rx
 
+from app.locales.catalog import catalog
 from app.components import screens
 from app.components.bills import bills_page
 from app.components.csv_transfer import data_transfer_page
@@ -24,6 +25,9 @@ def register() -> rx.Component:
 def login() -> rx.Component:
     return screens.auth_page(False, AuthState.login)
 
+
+catalog("ar")
+catalog("en")
 
 app = rx.App(
     theme=rx.theme(appearance="light"),

@@ -1,0 +1,23 @@
+{
+"brand.tagline":"دفتر البيت، وراحة البال","brand.footer":"Money Harmony · خطوات صغيرة، طمأنينة أكبر.",
+"language.label":"اللغة","language.ar":"العربية","language.en":"الإنجليزية","language.partial":"تُترجم الواجهة تدريجيًا؛ قد تبقى بعض التفاصيل والرسائل بالعربية.",
+"nav.dashboard":"الدفتر","nav.accounts":"الحسابات","nav.transactions":"المعاملات","nav.budgets":"الميزانيات","nav.goals":"الأهداف","nav.debts":"الديون","nav.bills":"الفواتير","nav.reports":"التقارير","nav.settings":"الإعدادات","nav.notifications":"الإشعارات","nav.main":"التنقل الرئيسي",
+"action.login":"تسجيل الدخول","action.open_ledger":"دخول إلى دفتري","action.refresh":"تحديث الدفتر","action.retry":"إعادة المحاولة","action.save":"حفظ التغييرات","action.cancel":"إلغاء","action.close":"إغلاق","action.edit":"تعديل","action.delete":"حذف","action.close_account":"إغلاق الحساب","action.logout":"تسجيل الخروج","action.add_account":"إضافة حساب","action.record_transaction":"تسجيل معاملة","action.new_transaction":"معاملة جديدة","action.new_recurring":"معاملة متكررة جديدة","action.new_budget":"ميزانية جديدة","action.new_goal":"هدف جديد","action.new_debt":"دين جديد","action.new_bill":"فاتورة جديدة","action.transfer":"تحويل بين حسابين","action.filters":"تطبيق الفلاتر","action.mark_read":"تحديد الكل كمقروء","action.csv":"استيراد وتصدير CSV","action.allocate":"تخصيص مبلغ","action.release":"تحرير مبلغ","action.restore":"استعادة","action.archive":"أرشفة","action.save_goal":"حفظ الهدف","action.save_debt":"حفظ الدين","action.record_payment":"تسجيل دفعة","action.save_bill":"حفظ الفاتورة","action.delete_bill":"حذف الفاتورة","action.mark_paid":"تحديد كمسددة","action.mark_unpaid":"إعادة لغير مسددة",
+"shell.loading":"نفتح دفتر أسرتك…",
+"auth.register_title":"افتح صفحة جديدة لأسرتك","auth.login_title":"أهلًا بعودتك إلى الدفتر","auth.register_subtitle":"تفاصيل بسيطة، وبداية مطمئنة.","auth.login_subtitle":"سجّل دخولك لمتابعة ميزانية البيت.","auth.name":"الاسم","auth.email":"البريد الإلكتروني","auth.password":"كلمة المرور","auth.confirm":"تأكيد كلمة المرور","auth.password_hint":"8 أحرف على الأقل. لا تشارك كلمة مرورك مع أحد.","auth.consent":"أوافق على شروط الاستخدام والخصوصية أدناه","auth.terms_title":"شروط الاستخدام والخصوصية","auth.terms":"يُستخدم هذا الدفتر لتنظيم ميزانية الأسرة، وليس لتقديم استشارات مالية. يرى أعضاء الأسرة البيانات بحسب صلاحياتهم. لا تُشارك رابط الدعوة إلا مع صاحب البريد المحدد. تُحفظ بياناتك لخدمة حسابك، ولا يرسل التطبيق بريدًا أو يربط حسابات بنكية. احرص على صحة البيانات وعلى سرية كلمة المرور.","auth.register":"إنشاء حساب ودفتر أسرة","auth.have_account":"لديك حساب؟ سجّل الدخول","auth.no_account":"ليس لديك حساب؟ ابدأ الآن",
+"dashboard.greeting":"أهلًا","dashboard.subtitle":"لنلقِ نظرة هادئة على أموال البيت هذا الشهر.",
+"accounts.title":"حسابات البيت","accounts.subtitle":"الأرصدة المسجّلة من المعاملات غير المحذوفة والتحويلات؛ إغلاق الحساب يحفظ تاريخه ويفصل رصيده عن مجموع الحسابات النشطة.","accounts.active":"الحسابات النشطة","accounts.closed":"الحسابات المغلقة",
+"transactions.title":"دفتر المعاملات","transactions.subtitle":"التفاصيل الصغيرة تصنع الصورة الكاملة.",
+"budgets.title":"مساحة لكل احتياج","budgets.subtitle":"ميزانيات شهرية مرنة، وخطوات أقرب إلى التوازن.",
+"goals.title":"أهداف الادخار","goals.subtitle":"مساحة للأحلام التي تخططون لها معًا، خطوة صغيرة في كل مرة.",
+"debts.title":"الديون والأقساط","debts.subtitle":"سجّل ما علينا وما لنا، وتابع الأقساط والدفعات معًا.",
+"bills.title":"الفواتير","bills.subtitle":"رتّب استحقاقات الأسرة وتابع سدادها من دون تغيير رصيد أي حساب.",
+"reports.title":"الصورة الأوضح","reports.subtitle":"تأمل عادات البيت المالية، وخطط للشهر القادم بثقة.",
+"settings.title":"إعدادات البيت","settings.subtitle":"أفراد الأسرة، دعوات المشاركة، وما تود أن يصلك من تنبيهات.",
+"notifications.title":"رسائل من الدفتر","notifications.subtitle":"مستجدات الأسرة وتنبيهات تساعدك على البقاء ضمن الخطة.",
+"currency.label":"عملة العرض · لا تحويل بين العملات","currency.accessible":"عملة عرض الأرصدة والميزانيات والتقارير",
+"metric.balance":"رصيد الحسابات النشطة","metric.income":"دخل الشهر","metric.expense":"مصروف الشهر","metric.saving":"صافي التوفير",
+"dashboard.recent":"آخر صفحات الدفتر","dashboard.all_transactions":"كل المعاملات","dashboard.plan":"خطتنا لهذا الشهر","dashboard.manage_budgets":"إدارة الميزانيات",
+"reminders.title":"مواعيد قريبة","reminders.subtitle":"تُحدّث التذكيرات داخل التطبيق عند زيارة الدفتر، ولا تُرسل في الخلفية أو بالبريد.","reminders.all":"عرض كل التذكيرات",
+"bills.register":"سجل الفواتير","bills.paid":"مسددة","bills.unpaid":"بانتظار السداد"
+}

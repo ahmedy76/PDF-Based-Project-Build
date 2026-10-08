@@ -1,5 +1,7 @@
 import reflex as rx
 
+from app.locales.catalog import t
+from app.states.language import LanguageState as L
 from app.states.auth import AuthState
 from app.states.ledger import LedgerState as S
 from app.states.receipts import ReceiptState
@@ -11,15 +13,66 @@ SECONDARY = "inline-flex items-center justify-center gap-2 rounded-xl border bor
 INPUT = "w-full rounded-xl border border-[#dcd8cb] bg-white px-3 py-3 text-base text-[#27394a] outline-hidden focus:border-[#62704b] focus:ring-2 focus:ring-[#62704b]/20"
 CARD = "rounded-2xl border border-[#e2ded2] bg-[#fffdf8] p-5 md:p-7"
 NAV = [
-    {"label": "الدفتر", "path": "/dashboard", "icon": "house"},
-    {"label": "الحسابات", "path": "/accounts", "icon": "wallet"},
-    {"label": "المعاملات", "path": "/transactions", "icon": "arrow-left-right"},
-    {"label": "الميزانيات", "path": "/budgets", "icon": "chart-pie"},
-    {"label": "الأهداف", "path": "/goals", "icon": "target"},
-    {"label": "الديون", "path": "/debts", "icon": "hand-coins"},
-    {"label": "الفواتير", "path": "/bills", "icon": "receipt-text"},
-    {"label": "التقارير", "path": "/reports", "icon": "chart-no-axes-combined"},
+    {"label": "nav.dashboard", "path": "/dashboard", "icon": "house"},
+    {"label": "nav.accounts", "path": "/accounts", "icon": "wallet"},
+    {
+        "label": "nav.transactions",
+        "path": "/transactions",
+        "icon": "arrow-left-right",
+    },
+    {"label": "nav.budgets", "path": "/budgets", "icon": "chart-pie"},
+    {"label": "nav.goals", "path": "/goals", "icon": "target"},
+    {"label": "nav.debts", "path": "/debts", "icon": "hand-coins"},
+    {"label": "nav.bills", "path": "/bills", "icon": "receipt-text"},
+    {
+        "label": "nav.reports",
+        "path": "/reports",
+        "icon": "chart-no-axes-combined",
+    },
 ]
+
+
+def language_toggle() -> rx.Component:
+    return rx.el.div(
+        rx.el.span(
+            t("language.label"),
+            class_name="text-xs font-semibold text-[#52604f]",
+        ),
+        rx.el.div(
+            rx.el.button(
+                "AR",
+                type="button",
+                lang="ar",
+                aria_label=t("language.ar"),
+                aria_pressed=L.language == "ar",
+                on_click=lambda: L.set_language("ar"),
+                class_name=rx.cond(
+                    L.language == "ar",
+                    "rounded-lg bg-[#62704b] px-2 py-2 text-xs font-bold text-white focus-visible:outline-2 focus-visible:outline-[#62704b]",
+                    "rounded-lg bg-[#fffdf8] px-2 py-2 text-xs font-bold text-[#52604f] hover:bg-[#eeece2] focus-visible:outline-2 focus-visible:outline-[#62704b]",
+                ),
+            ),
+            rx.el.button(
+                "EN",
+                type="button",
+                lang="en",
+                aria_label=t("language.en"),
+                aria_pressed=L.language == "en",
+                on_click=lambda: L.set_language("en"),
+                class_name=rx.cond(
+                    L.language == "en",
+                    "rounded-lg bg-[#62704b] px-2 py-2 text-xs font-bold text-white focus-visible:outline-2 focus-visible:outline-[#62704b]",
+                    "rounded-lg bg-[#fffdf8] px-2 py-2 text-xs font-bold text-[#52604f] hover:bg-[#eeece2] focus-visible:outline-2 focus-visible:outline-[#62704b]",
+                ),
+            ),
+            role="group",
+            aria_label=t("language.label"),
+            dir="ltr",
+            class_name="flex gap-1 rounded-xl border border-[#ddd9cd] bg-[#fffdf8] p-1",
+        ),
+        title=t("language.partial"),
+        class_name="flex shrink-0 flex-col items-center gap-1",
+    )
 
 
 def brand() -> rx.Component:
@@ -34,7 +87,7 @@ def brand() -> rx.Component:
                 class_name="block text-lg font-bold tracking-tight",
             ),
             rx.el.span(
-                "دفتر البيت، وراحة البال",
+                t("brand.tagline"),
                 class_name="block text-xs font-medium text-[#7c8178]",
             ),
         ),
@@ -121,7 +174,8 @@ def notice() -> rx.Component:
 def nav_item(item: dict[str, str]) -> rx.Component:
     return rx.el.a(
         rx.icon(item["icon"], class_name="h-5 w-5"),
-        rx.el.span(item["label"]),
+        rx.el.span(t(item["label"])),
+        aria_label=t(item["label"]),
         href=item["path"],
         class_name="flex min-w-[70px] shrink-0 flex-col items-center justify-center gap-1 rounded-xl px-2 py-3 text-xs font-semibold text-[#52604f] hover:bg-[#e9ecdf] lg:min-w-0 lg:flex-row lg:gap-1 lg:px-1.5 xl:gap-2 xl:px-2 xl:text-sm",
     )
@@ -133,21 +187,23 @@ def header() -> rx.Component:
             brand(),
             rx.el.nav(
                 rx.foreach(NAV, nav_item),
+                aria_label=t("nav.main"),
                 class_name="hidden items-center gap-1 lg:flex",
             ),
             rx.el.div(
                 rx.el.a(
                     rx.icon("bell", class_name="h-5 w-5"),
                     href="/notifications",
-                    aria_label="الإشعارات",
+                    aria_label=t("nav.notifications"),
                     class_name=SECONDARY,
                 ),
                 rx.el.a(
                     rx.icon("settings-2", class_name="h-5 w-5"),
                     href="/settings",
-                    aria_label="الإعدادات",
+                    aria_label=t("nav.settings"),
                     class_name=SECONDARY,
                 ),
+                language_toggle(),
                 class_name="flex gap-2",
             ),
             class_name="mx-auto flex max-w-[1440px] items-center justify-between gap-4 px-5 py-4 md:px-10",
@@ -167,13 +223,20 @@ def shell(content: rx.Component) -> rx.Component:
                         rx.el.span(S.household_name),
                         rx.el.button(
                             rx.icon("refresh-cw", class_name="h-3.5 w-3.5"),
-                            "تحديث الدفتر",
+                            t("action.refresh"),
                             on_click=S.load,
                             class_name="flex items-center gap-2 hover:text-[#62704b]",
                         ),
                         class_name="mb-5 flex justify-between border-b border-[#e4e0d4] pb-4 text-xs text-[#7d8277]",
                     ),
                     notice(),
+                    rx.cond(
+                        L.language == "en",
+                        rx.el.p(
+                            t("language.partial"),
+                            class_name="mb-4 text-xs text-[#7d8277]",
+                        ),
+                    ),
                     content,
                     editor(),
                     delete_confirmation(),
@@ -184,11 +247,11 @@ def shell(content: rx.Component) -> rx.Component:
                 rx.el.div(
                     notice(),
                     rx.el.p(
-                        "نفتح دفتر أسرتك…",
+                        t("shell.loading"),
                         class_name="py-20 text-center text-[#7c8178]",
                     ),
                     rx.el.button(
-                        "إعادة المحاولة", on_click=S.load, class_name=SECONDARY
+                        t("action.retry"), on_click=S.load, class_name=SECONDARY
                     ),
                 ),
             ),
@@ -196,12 +259,17 @@ def shell(content: rx.Component) -> rx.Component:
         ),
         rx.el.nav(
             rx.foreach(NAV, nav_item),
-            aria_label="التنقل الرئيسي",
+            aria_label=t("nav.main"),
             class_name="fixed inset-x-0 bottom-0 z-20 flex justify-start gap-1 overflow-x-auto border-t border-[#dedacd] bg-[#fffdf8] px-2 pb-2 lg:hidden",
         ),
-        dir="rtl",
-        lang="ar",
-        class_name="flex h-dvh flex-col overflow-hidden bg-[#f6f4ec] font-['Tajawal'] text-[#27394a]",
+        dir=L.direction,
+        lang=L.language,
+        on_mount=L.hydrate_language,
+        class_name=rx.cond(
+            L.language == "ar",
+            "flex h-dvh flex-col overflow-hidden bg-[#f6f4ec] font-['Tajawal'] text-[#27394a]",
+            "flex h-dvh flex-col overflow-hidden bg-[#f6f4ec] font-sans text-[#27394a]",
+        ),
     )
 
 
@@ -209,26 +277,44 @@ def public_shell(content: rx.Component) -> rx.Component:
     return rx.el.div(
         rx.el.header(
             brand(),
-            rx.el.a("دخول إلى دفتري", href="/login", class_name=SECONDARY),
+            rx.el.div(
+                rx.el.a(
+                    t("action.open_ledger"), href="/login", class_name=SECONDARY
+                ),
+                language_toggle(),
+                class_name="flex items-center gap-2",
+            ),
             class_name="mx-auto flex max-w-6xl items-center justify-between px-5 py-6",
         ),
         rx.el.main(
             content, class_name="mx-auto w-full max-w-6xl px-5 py-10 md:py-16"
         ),
         rx.el.footer(
-            "Money Harmony · خطوات صغيرة، طمأنينة أكبر.",
+            rx.el.p(t("brand.footer")),
+            rx.cond(
+                L.language == "en",
+                rx.el.p(
+                    t("language.partial"),
+                    class_name="mt-2 text-xs text-[#7d8277]",
+                ),
+            ),
             class_name="px-5 py-8 text-center text-sm text-[#7d8277]",
         ),
-        dir="rtl",
-        lang="ar",
-        class_name="min-h-dvh bg-[#f6f4ec] font-['Tajawal'] text-[#27394a]",
+        dir=L.direction,
+        lang=L.language,
+        on_mount=L.hydrate_language,
+        class_name=rx.cond(
+            L.language == "ar",
+            "min-h-dvh bg-[#f6f4ec] font-['Tajawal'] text-[#27394a]",
+            "min-h-dvh bg-[#f6f4ec] font-sans text-[#27394a]",
+        ),
     )
 
 
 def currency_switcher() -> rx.Component:
     return rx.el.label(
         rx.el.span(
-            "عملة العرض · لا تحويل بين العملات",
+            t("currency.label"),
             class_name="mb-2 block text-sm font-semibold text-[#465344]",
         ),
         rx.el.div(
@@ -239,7 +325,7 @@ def currency_switcher() -> rx.Component:
                 ),
                 value=S.view_currency,
                 on_change=S.set_view_currency,
-                aria_label="عملة عرض الأرصدة والميزانيات والتقارير",
+                aria_label=t("currency.accessible"),
                 class_name="w-full appearance-none rounded-xl border border-[#dcd8cb] bg-[#fffdf8] px-4 py-3 pl-10 text-sm font-bold text-[#27394a] focus:outline-2 focus:outline-[#62704b]",
             ),
             rx.icon(
@@ -280,7 +366,7 @@ def edit_actions(kind: str, row) -> rx.Component:
         rx.el.div(
             rx.el.button(
                 rx.icon("pencil", class_name="h-4 w-4"),
-                "تعديل",
+                t("action.edit"),
                 on_click=lambda: S.open_editor(kind, row["id"]),
                 class_name="flex items-center gap-1 rounded-lg px-3 py-2 text-xs text-[#62704b] hover:bg-[#edf0e5]",
             ),
@@ -290,7 +376,11 @@ def edit_actions(kind: str, row) -> rx.Component:
                     rx.icon("archive", class_name="h-4 w-4"),
                     rx.icon("trash-2", class_name="h-4 w-4"),
                 ),
-                rx.cond(kind == "account", "إغلاق الحساب", "حذف"),
+                rx.cond(
+                    kind == "account",
+                    t("action.close_account"),
+                    t("action.delete"),
+                ),
                 on_click=lambda: S.ask_delete(kind, row["id"]),
                 class_name=rx.cond(
                     kind == "account",
@@ -459,7 +549,7 @@ def editor() -> rx.Component:
                     rx.el.button(
                         rx.icon("x", class_name="h-5 w-5"),
                         on_click=S.close_editor,
-                        aria_label="إغلاق",
+                        aria_label=t("action.close"),
                         class_name=SECONDARY,
                     ),
                     class_name="mb-5 flex items-center justify-between",
@@ -881,10 +971,10 @@ def editor() -> rx.Component:
                     ),
                     rx.el.div(
                         rx.el.button(
-                            "حفظ التغييرات", type="submit", class_name=BUTTON
+                            t("action.save"), type="submit", class_name=BUTTON
                         ),
                         rx.el.button(
-                            "إلغاء",
+                            t("action.cancel"),
                             type="button",
                             on_click=S.close_editor,
                             class_name=SECONDARY,

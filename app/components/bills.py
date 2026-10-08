@@ -1,5 +1,6 @@
 import reflex as rx
 
+from app.locales.catalog import t
 from app.states.bills import BillRow, ReminderRow, BillState as B
 from app.states.ledger import LedgerState as S
 from app.components.ui import (
@@ -41,16 +42,16 @@ def reminder_section() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 rx.el.h2(
-                    "مواعيد قريبة",
+                    t("reminders.title"),
                     class_name="text-xl font-bold text-[#27394a]",
                 ),
                 rx.el.p(
-                    "تُحدّث التذكيرات داخل التطبيق عند زيارة الدفتر، ولا تُرسل في الخلفية أو بالبريد.",
+                    t("reminders.subtitle"),
                     class_name="mt-1 text-sm leading-7 text-[#7c8178]",
                 ),
             ),
             rx.el.a(
-                "عرض كل التذكيرات ←",
+                t("reminders.all"),
                 href="/notifications",
                 class_name="text-sm font-bold text-[#62704b] hover:underline",
             ),
@@ -82,7 +83,9 @@ def bill_card(row: BillRow) -> rx.Component:
                 class_name="flex min-w-0 items-center gap-3",
             ),
             rx.el.span(
-                rx.cond(row["status"] == "paid", "مسددة", "بانتظار السداد"),
+                rx.cond(
+                    row["status"] == "paid", t("bills.paid"), t("bills.unpaid")
+                ),
                 class_name=rx.cond(
                     row["status"] == "paid",
                     "w-fit rounded-full bg-[#e9eddf] px-3 py-1 text-xs font-bold text-[#62704b]",
@@ -123,8 +126,8 @@ def bill_card(row: BillRow) -> rx.Component:
                 rx.el.button(
                     rx.cond(
                         row["status"] == "paid",
-                        "إعادة لغير مسددة",
-                        "تحديد كمسددة",
+                        t("action.mark_unpaid"),
+                        t("action.mark_paid"),
                     ),
                     on_click=lambda: B.set_paid(
                         row["id"], row["status"] != "paid"
@@ -132,12 +135,12 @@ def bill_card(row: BillRow) -> rx.Component:
                     class_name=BUTTON,
                 ),
                 rx.el.button(
-                    "تعديل",
+                    t("action.edit"),
                     on_click=lambda: B.open_bill(row["id"]),
                     class_name=SECONDARY,
                 ),
                 rx.el.button(
-                    "حذف الفاتورة",
+                    t("action.delete_bill"),
                     on_click=lambda: B.delete_bill(row["id"]),
                     class_name="rounded-xl border border-[#e2ded2] px-4 py-2.5 text-sm font-semibold text-[#a26550] hover:bg-[#f5e9e3]",
                 ),
@@ -164,7 +167,7 @@ def bill_dialog() -> rx.Component:
                     rx.el.button(
                         rx.icon("x", class_name="h-4 w-4"),
                         on_click=B.close_bill,
-                        aria_label="إغلاق",
+                        aria_label=t("action.close"),
                         class_name=SECONDARY,
                     ),
                     class_name="mb-5 flex items-center justify-between gap-3",
@@ -234,10 +237,12 @@ def bill_dialog() -> rx.Component:
                     ),
                     rx.el.div(
                         rx.el.button(
-                            "حفظ الفاتورة", type="submit", class_name=BUTTON
+                            t("action.save_bill"),
+                            type="submit",
+                            class_name=BUTTON,
                         ),
                         rx.el.button(
-                            "إلغاء",
+                            t("action.cancel"),
                             type="button",
                             on_click=B.close_bill,
                             class_name=SECONDARY,
@@ -263,14 +268,14 @@ def bills_page() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "الفواتير",
-                    "رتّب استحقاقات الأسرة وتابع سدادها من دون تغيير رصيد أي حساب.",
+                    t("bills.title"),
+                    t("bills.subtitle"),
                 ),
                 rx.cond(
                     S.can_add_transactions,
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
-                        "فاتورة جديدة",
+                        t("action.new_bill"),
                         on_click=lambda: B.open_bill(),
                         disabled=B.accounts.length() == 0,
                         class_name=BUTTON,
@@ -304,7 +309,7 @@ def bills_page() -> rx.Component:
             ),
             rx.el.div(
                 rx.el.h2(
-                    "سجل الفواتير",
+                    t("bills.register"),
                     class_name="mb-4 text-xl font-bold text-[#27394a]",
                 ),
                 rx.cond(

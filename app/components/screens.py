@@ -1,6 +1,7 @@
 import reflex as rx
 import reflex_xy
 
+from app.locales.catalog import t
 from app.states.auth import AuthState
 from app.components.landing import landing_content
 from app.components.member_access import member_access_panel
@@ -47,16 +48,16 @@ def auth_page(
                 rx.el.h1(
                     rx.cond(
                         registering,
-                        "افتح صفحة جديدة لأسرتك",
-                        "أهلًا بعودتك إلى الدفتر",
+                        t("auth.register_title"),
+                        t("auth.login_title"),
                     ),
                     class_name="text-center text-3xl font-bold",
                 ),
                 rx.el.p(
                     rx.cond(
                         registering,
-                        "تفاصيل بسيطة، وبداية مطمئنة.",
-                        "سجّل دخولك لمتابعة ميزانية البيت.",
+                        t("auth.register_subtitle"),
+                        t("auth.login_subtitle"),
                     ),
                     class_name="mb-7 mt-3 text-center text-[#7c8178]",
                 ),
@@ -69,15 +70,15 @@ def auth_page(
                     ),
                 ),
                 rx.el.form(
-                    rx.cond(registering, field("الاسم", "name")),
-                    field("البريد الإلكتروني", "email", "email"),
-                    field("كلمة المرور", "password", "password"),
+                    rx.cond(registering, field(t("auth.name"), "name")),
+                    field(t("auth.email"), "email", "email"),
+                    field(t("auth.password"), "password", "password"),
                     rx.cond(
                         registering,
                         rx.el.div(
-                            field("تأكيد كلمة المرور", "confirm", "password"),
+                            field(t("auth.confirm"), "confirm", "password"),
                             rx.el.p(
-                                "8 أحرف على الأقل. لا تشارك كلمة مرورك مع أحد.",
+                                t("auth.password_hint"),
                                 class_name="mt-2 text-xs text-[#7c8178]",
                             ),
                             rx.el.label(
@@ -87,16 +88,16 @@ def auth_page(
                                     required=True,
                                     class_name="h-4 w-4 accent-[#62704b]",
                                 ),
-                                "أوافق على شروط الاستخدام والخصوصية أدناه",
+                                t("auth.consent"),
                                 class_name="mt-5 flex items-center gap-2 text-sm",
                             ),
                             rx.el.details(
                                 rx.el.summary(
-                                    "شروط الاستخدام والخصوصية",
+                                    t("auth.terms_title"),
                                     class_name="cursor-pointer text-sm text-[#62704b]",
                                 ),
                                 rx.el.p(
-                                    "يُستخدم هذا الدفتر لتنظيم ميزانية الأسرة، وليس لتقديم استشارات مالية. يرى أعضاء الأسرة حساباتها ومعاملاتها وميزانياتها. لا تُشارك رابط الدعوة إلا مع صاحب البريد المحدد. تُحفظ بياناتك لخدمة حسابك، ولا يرسل التطبيق بريدًا أو يربط حسابات بنكية. احرص على صحة البيانات وعلى سرية كلمة المرور.",
+                                    t("auth.terms"),
                                     class_name="mt-3 text-xs leading-7 text-[#7c8178]",
                                 ),
                                 class_name="mt-4",
@@ -105,7 +106,7 @@ def auth_page(
                     ),
                     rx.el.button(
                         rx.cond(
-                            registering, "إنشاء حساب ودفتر أسرة", "تسجيل الدخول"
+                            registering, t("auth.register"), t("action.login")
                         ),
                         type="submit",
                         class_name=BUTTON,
@@ -116,8 +117,8 @@ def auth_page(
                 rx.el.a(
                     rx.cond(
                         registering,
-                        "لديك حساب؟ سجّل الدخول",
-                        "ليس لديك حساب؟ ابدأ الآن",
+                        t("auth.have_account"),
+                        t("auth.no_account"),
                     ),
                     href=rx.cond(registering, "/login", "/register"),
                     class_name="mt-6 block text-center text-sm text-[#62704b]",
@@ -263,14 +264,14 @@ def dashboard() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    f"أهلًا {AuthState.name}،",
-                    "لنلقِ نظرة هادئة على أموال البيت هذا الشهر.",
+                    f"{t('dashboard.greeting')} {AuthState.name}",
+                    t("dashboard.subtitle"),
                 ),
                 rx.cond(
                     S.can_add_transactions,
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
-                        "تسجيل معاملة",
+                        t("action.record_transaction"),
                         on_click=lambda: S.open_editor("transaction"),
                         class_name=BUTTON,
                     ),
@@ -288,10 +289,10 @@ def dashboard() -> rx.Component:
             ),
             currency_switcher(),
             rx.el.div(
-                metric("رصيد الحسابات النشطة", S.total, "wallet"),
-                metric("دخل الشهر", S.income, "arrow-down-left"),
-                metric("مصروف الشهر", S.expense, "arrow-up-right"),
-                metric("صافي التوفير", S.saving, "sprout"),
+                metric(t("metric.balance"), S.total, "wallet"),
+                metric(t("metric.income"), S.income, "arrow-down-left"),
+                metric(t("metric.expense"), S.expense, "arrow-up-right"),
+                metric(t("metric.saving"), S.saving, "sprout"),
                 class_name="mb-4 grid grid-cols-2 gap-4 xl:grid-cols-4",
             ),
             rx.cond(
@@ -306,10 +307,11 @@ def dashboard() -> rx.Component:
                 rx.el.section(
                     rx.el.div(
                         rx.el.h2(
-                            "آخر صفحات الدفتر", class_name="text-xl font-bold"
+                            t("dashboard.recent"),
+                            class_name="text-xl font-bold",
                         ),
                         rx.el.a(
-                            "كل المعاملات ←",
+                            t("dashboard.all_transactions"),
                             href="/transactions",
                             class_name="text-sm text-[#62704b]",
                         ),
@@ -344,9 +346,9 @@ def dashboard() -> rx.Component:
                 class_name="mb-7 flex w-full flex-wrap items-center gap-3 rounded-2xl border border-[#dce0ce] bg-[#edf0e3] px-5 py-4 text-sm font-bold text-[#62704b] hover:bg-[#e2e9d6]",
             ),
             rx.el.div(
-                rx.el.h2("خطتنا لهذا الشهر", class_name="text-xl font-bold"),
+                rx.el.h2(t("dashboard.plan"), class_name="text-xl font-bold"),
                 rx.el.a(
-                    "إدارة الميزانيات ←",
+                    t("dashboard.manage_budgets"),
                     href="/budgets",
                     class_name="text-sm text-[#62704b]",
                 ),
@@ -455,7 +457,7 @@ def transfer_form() -> rx.Component:
             rx.el.section(
                 rx.el.div(
                     rx.el.h2(
-                        "تحويل بين حسابين",
+                        t("action.transfer"),
                         class_name="text-xl font-bold text-[#27394a]",
                     ),
                     rx.el.button(
@@ -568,7 +570,7 @@ def transfer_form() -> rx.Component:
                                 class_name=BUTTON,
                             ),
                             rx.el.button(
-                                "إلغاء",
+                                t("action.cancel"),
                                 type="button",
                                 on_click=S.close_transfer,
                                 class_name=SECONDARY,
@@ -598,8 +600,8 @@ def accounts() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "حسابات البيت",
-                    "الأرصدة المسجّلة من المعاملات غير المحذوفة والتحويلات؛ إغلاق الحساب يحفظ تاريخه ويفصل رصيده عن مجموع الحسابات النشطة.",
+                    t("accounts.title"),
+                    t("accounts.subtitle"),
                 ),
                 rx.el.div(
                     rx.cond(
@@ -613,7 +615,7 @@ def accounts() -> rx.Component:
                     ),
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
-                        "إضافة حساب",
+                        t("action.add_account"),
                         on_click=lambda: S.open_editor("account"),
                         class_name=BUTTON,
                     ),
@@ -623,7 +625,7 @@ def accounts() -> rx.Component:
             ),
             rx.el.section(
                 rx.el.h2(
-                    "الحسابات النشطة", class_name="mb-4 text-xl font-bold"
+                    t("accounts.active"), class_name="mb-4 text-xl font-bold"
                 ),
                 rx.cond(
                     S.accounts.length() > 0,
@@ -640,7 +642,7 @@ def accounts() -> rx.Component:
             rx.el.section(
                 rx.el.div(
                     rx.el.h2(
-                        "الحسابات المغلقة", class_name="text-xl font-bold"
+                        t("accounts.closed"), class_name="text-xl font-bold"
                     ),
                     rx.cond(
                         S.archived_accounts.length() > 0,
@@ -727,7 +729,7 @@ def recurring_card(row) -> rx.Component:
                 S.can_add_transactions,
                 rx.el.button(
                     rx.icon("pencil", class_name="h-4 w-4"),
-                    "تعديل",
+                    t("action.edit"),
                     on_click=lambda: S.open_editor("recurring", row["id"]),
                     class_name=SECONDARY,
                 ),
@@ -752,13 +754,13 @@ def transactions() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "دفتر المعاملات", "التفاصيل الصغيرة تصنع الصورة الكاملة."
+                    t("transactions.title"), t("transactions.subtitle")
                 ),
                 rx.cond(
                     S.can_add_transactions,
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
-                        "معاملة جديدة",
+                        t("action.new_transaction"),
                         on_click=lambda: S.open_editor("transaction"),
                         class_name=BUTTON,
                     ),
@@ -767,7 +769,7 @@ def transactions() -> rx.Component:
             ),
             rx.el.a(
                 rx.icon("file-up", class_name="h-4 w-4"),
-                "استيراد وتصدير CSV",
+                t("action.csv"),
                 href="/data-transfer",
                 class_name="mb-5 inline-flex items-center gap-2 text-sm font-bold text-[#62704b] hover:underline",
             ),
@@ -835,7 +837,7 @@ def transactions() -> rx.Component:
                     field("من تاريخ", "start", "date", required=False),
                     field("إلى تاريخ", "end", "date", required=False),
                     rx.el.button(
-                        "تطبيق الفلاتر", type="submit", class_name=BUTTON
+                        t("action.filters"), type="submit", class_name=BUTTON
                     ),
                     on_submit=S.apply_filters,
                     class_name="mt-5 grid items-end gap-4 sm:grid-cols-2 lg:grid-cols-3",
@@ -866,7 +868,7 @@ def transactions() -> rx.Component:
                         S.can_add_transactions,
                         rx.el.button(
                             rx.icon("plus", class_name="h-4 w-4"),
-                            "معاملة متكررة جديدة",
+                            t("action.new_recurring"),
                             on_click=lambda: S.open_editor("recurring"),
                             class_name=BUTTON,
                         ),
@@ -1009,18 +1011,18 @@ def goal_card(row: GoalRow, archived: bool = False) -> rx.Component:
                 archived,
                 rx.el.button(
                     rx.icon("archive-restore", class_name="h-4 w-4"),
-                    "استعادة",
+                    t("action.restore"),
                     on_click=lambda: G.set_archived(row["id"], False),
                     class_name=SECONDARY,
                 ),
                 rx.el.div(
                     rx.el.button(
-                        "تخصيص مبلغ",
+                        t("action.allocate"),
                         on_click=lambda: G.open_allocation(row["id"], "add"),
                         class_name=BUTTON,
                     ),
                     rx.el.button(
-                        "تحرير مبلغ",
+                        t("action.release"),
                         on_click=lambda: G.open_allocation(
                             row["id"], "release"
                         ),
@@ -1032,7 +1034,7 @@ def goal_card(row: GoalRow, archived: bool = False) -> rx.Component:
                         class_name=SECONDARY,
                     ),
                     rx.el.button(
-                        "أرشفة",
+                        t("action.archive"),
                         on_click=lambda: G.set_archived(row["id"], True),
                         class_name=SECONDARY,
                     ),
@@ -1111,7 +1113,9 @@ def goal_dialog() -> rx.Component:
                             class_name="text-xs text-[#7c8178]",
                         ),
                         rx.el.button(
-                            "حفظ الهدف", type="submit", class_name=BUTTON
+                            t("action.save_goal"),
+                            type="submit",
+                            class_name=BUTTON,
                         ),
                         on_submit=G.save_goal,
                         key=G.edit_id,
@@ -1153,12 +1157,12 @@ def goals() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "أهداف الادخار",
-                    "مساحة للأحلام التي تخططون لها معًا، خطوة صغيرة في كل مرة.",
+                    t("goals.title"),
+                    t("goals.subtitle"),
                 ),
                 rx.el.button(
                     rx.icon("plus", class_name="h-4 w-4"),
-                    "هدف جديد",
+                    t("action.new_goal"),
                     on_click=lambda: G.open_goal(),
                     class_name=BUTTON,
                 ),
@@ -1419,7 +1423,7 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
                     rx.cond(
                         row["remaining"] != "0.0000",
                         rx.el.button(
-                            "تسجيل دفعة",
+                            t("action.record_payment"),
                             on_click=lambda: D.open_payment(row["id"]),
                             class_name=BUTTON,
                         ),
@@ -1537,7 +1541,9 @@ def debt_dialog() -> rx.Component:
                                 ),
                             ),
                             rx.el.button(
-                                "حفظ الدين", type="submit", class_name=BUTTON
+                                t("action.save_debt"),
+                                type="submit",
+                                class_name=BUTTON,
                             ),
                             on_submit=D.save_debt,
                             key=D.edit_id,
@@ -1595,12 +1601,12 @@ def debts() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "الديون والأقساط",
-                    "سجّل ما علينا وما لنا، وتابع الأقساط والدفعات معًا.",
+                    t("debts.title"),
+                    t("debts.subtitle"),
                 ),
                 rx.el.button(
                     rx.icon("plus", class_name="h-4 w-4"),
-                    "دين جديد",
+                    t("action.new_debt"),
                     on_click=lambda: D.open_debt(),
                     class_name=BUTTON,
                 ),
@@ -1739,14 +1745,14 @@ def budgets() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "مساحة لكل احتياج",
-                    "ميزانيات شهرية مرنة، وخطوات أقرب إلى التوازن.",
+                    t("budgets.title"),
+                    t("budgets.subtitle"),
                 ),
                 rx.cond(
                     S.can_edit_budgets,
                     rx.el.button(
                         rx.icon("plus", class_name="h-4 w-4"),
-                        "ميزانية جديدة",
+                        t("action.new_budget"),
                         on_click=lambda: S.open_editor("budget"),
                         class_name=BUTTON,
                     ),
@@ -1782,8 +1788,8 @@ def reports() -> rx.Component:
     return shell(
         rx.el.div(
             section_title(
-                "الصورة الأوضح",
-                "تأمل عادات البيت المالية، وخطط للشهر القادم بثقة.",
+                t("reports.title"),
+                t("reports.subtitle"),
             ),
             currency_switcher(),
             rx.el.div(
@@ -1840,7 +1846,7 @@ def reports() -> rx.Component:
             rx.el.div(
                 metric("إجمالي الدخل", S.report_income, "arrow-down-left"),
                 metric("إجمالي المصروف", S.report_expense, "arrow-up-right"),
-                metric("صافي التوفير", S.report_saving, "sprout"),
+                metric(t("metric.saving"), S.report_saving, "sprout"),
                 class_name="mb-6 grid gap-4 sm:grid-cols-3",
             ),
             rx.el.div(
@@ -1906,11 +1912,11 @@ def notifications() -> rx.Component:
         rx.el.div(
             rx.el.div(
                 section_title(
-                    "رسائل من الدفتر",
-                    "مستجدات الأسرة وتنبيهات تساعدك على البقاء ضمن الخطة.",
+                    t("notifications.title"),
+                    t("notifications.subtitle"),
                 ),
                 rx.el.button(
-                    "تحديد الكل كمقروء",
+                    t("action.mark_read"),
                     on_click=lambda: S.mark_read(""),
                     class_name=SECONDARY,
                 ),
@@ -2232,8 +2238,8 @@ def settings() -> rx.Component:
     return shell(
         rx.el.div(
             section_title(
-                "إعدادات البيت",
-                "أفراد الأسرة، دعوات المشاركة، وما تود أن يصلك من تنبيهات.",
+                t("settings.title"),
+                t("settings.subtitle"),
             ),
             rx.el.div(
                 rx.el.div(
@@ -2280,7 +2286,7 @@ def settings() -> rx.Component:
                         ),
                         rx.el.button(
                             rx.icon("log-out", class_name="h-4 w-4"),
-                            "تسجيل الخروج",
+                            t("action.logout"),
                             on_click=AuthState.logout,
                             class_name="mt-6 flex items-center gap-2 text-sm text-[#a26550]",
                         ),
