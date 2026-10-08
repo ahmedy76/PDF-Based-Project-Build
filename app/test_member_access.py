@@ -6,7 +6,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
-from app.components.member_access import member_access_panel
+from app.components.member_access import (
+    account_switch,
+    member_access_panel,
+    member_card,
+)
 from app.states.member_access import MemberAccessState
 
 
@@ -276,6 +280,15 @@ class MemberAccessTests(unittest.IsolatedAsyncioTestCase):
         )
         self.db.delete.assert_called_once_with(created)
         self.assertEqual(self.db.commit.call_count, 2)
+
+    def test_disclosure_permission_is_on_member_card_not_account_row(self):
+        member = MemberAccessState.members[0]
+        account = member["accounts"][0]
+        row = str(account_switch(member, account))
+        card = str(member_card(member))
+        self.assertNotIn("planning.disclosure", row)
+        self.assertNotIn("can_view_commitments", row)
+        self.assertIn("planning.disclosure", card)
 
     def test_ui_panel_uses_existing_settings_controls(self):
         panel = member_access_panel()

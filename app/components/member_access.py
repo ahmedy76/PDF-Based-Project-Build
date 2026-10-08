@@ -13,16 +13,6 @@ def account_switch(
     member: MemberAccess, account: AccountAccess
 ) -> rx.Component:
     return rx.el.div(
-        permission_switch(
-            member,
-            t("planning.disclosure"),
-            "can_view_commitments",
-            member["can_view_commitments"],
-        ),
-        rx.el.p(
-            t("planning.disclosure_help"),
-            class_name="mt-2 text-sm leading-6 text-[#7c8178]",
-        ),
         rx.el.div(
             rx.icon("wallet", class_name="h-4 w-4 text-[#62704b]"),
             rx.el.span(
@@ -93,6 +83,16 @@ def member_card(member: MemberAccess) -> rx.Component:
             "تعديل الميزانيات",
             "can_edit_budgets",
             member["can_edit_budgets"],
+        ),
+        permission_switch(
+            member,
+            t("planning.disclosure"),
+            "can_view_commitments",
+            member["can_view_commitments"],
+        ),
+        rx.el.p(
+            t("planning.disclosure_help"),
+            class_name="mt-2 text-sm leading-6 text-[#7c8178]",
         ),
         rx.el.div(
             rx.icon("wallet", class_name="h-4 w-4 text-[#62704b]"),

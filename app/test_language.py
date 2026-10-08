@@ -154,6 +154,7 @@ class BilingualShellTests(unittest.TestCase):
                 "/goals",
                 "/debts",
                 "/bills",
+                "/family-planning",
                 "/reports",
             ],
         )
