@@ -148,7 +148,7 @@ class AuditEventIntegrationTests(unittest.IsolatedAsyncioTestCase):
         state.editor = "transaction"
         user, member = (
             SimpleNamespace(id=uuid4()),
-            SimpleNamespace(household_id=uuid4()),
+            SimpleNamespace(household_id=uuid4(), role="owner"),
         )
         account = SimpleNamespace(
             id=uuid4(), opening_date=date(2020, 1, 1), is_archived=False
@@ -255,7 +255,7 @@ class AuditEventIntegrationTests(unittest.IsolatedAsyncioTestCase):
         state.edit_id = ""
         user, member = (
             SimpleNamespace(id=uuid4()),
-            SimpleNamespace(household_id=uuid4()),
+            SimpleNamespace(household_id=uuid4(), role="owner"),
         )
         account = SimpleNamespace(
             id=uuid4(), opening_date=date(2020, 1, 1), is_archived=False
