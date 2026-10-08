@@ -25,6 +25,7 @@ class MemberAccess(TypedDict):
     name: str
     can_add_transactions: bool
     can_edit_budgets: bool
+    can_view_commitments: bool
     accounts: list[AccountAccess]
 
 
@@ -109,6 +110,9 @@ class MemberAccessState(rx.State):
                 "name": name,
                 "can_add_transactions": member.can_add_transactions,
                 "can_edit_budgets": member.can_edit_budgets,
+                "can_view_commitments": getattr(
+                    member, "can_view_commitments", False
+                ),
                 "accounts": [
                     {
                         "id": str(account.id),
@@ -160,7 +164,11 @@ class MemberAccessState(rx.State):
     @rx.event
     async def toggle_permission(self, target_id: str, permission: str):
         try:
-            if permission not in ("can_add_transactions", "can_edit_budgets"):
+            if permission not in (
+                "can_add_transactions",
+                "can_edit_budgets",
+                "can_view_commitments",
+            ):
                 raise ValueError("صلاحية غير مدعومة.")
             auth = await self.get_state(AuthState)
             async with rx.asession() as session:

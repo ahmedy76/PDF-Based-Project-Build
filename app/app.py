@@ -3,6 +3,8 @@ import reflex as rx
 from app.locales.catalog import catalog
 from app.components import screens
 from app.components.bills import bills_page
+from app.components.family_planning import family_planning_page
+from app.states.family_planning import FamilyPlanningState
 from app.components.csv_transfer import data_transfer_page
 from app.states.csv_transfer import CsvTransferState
 from app.states.bills import BillState
@@ -109,6 +111,12 @@ app.add_page(
     route="/bills",
     title="الفواتير | Money Harmony",
     on_load=[LedgerState.load, BillState.load],
+)
+app.add_page(
+    family_planning_page,
+    route="/family-planning",
+    title="تخطيط الأسرة | Money Harmony",
+    on_load=[LedgerState.load, FamilyPlanningState.load],
 )
 app.add_page(
     screens.reports,

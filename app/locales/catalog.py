@@ -5,6 +5,7 @@ import logging
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
+from app.locales.family_planning import LABELS
 
 Language = Literal["ar", "en"]
 Direction = Literal["rtl", "ltr"]
@@ -22,17 +23,8 @@ def language_direction(value: str) -> Direction:
 def _read_catalog(language: Language) -> dict[str, str]:
     try:
         path = Path(__file__).with_name(f"{language}.json")
-        source = path if path.exists() else path.with_suffix(".txt")
-        raw = source.read_text(encoding="utf-8")
+        raw = path.read_text(encoding="utf-8")
         payload = json.loads(raw)
-        if not path.exists():
-            try:
-                with path.open("x", encoding="utf-8") as output:
-                    output.write(raw)
-            except FileExistsError:
-                logging.exception("Unexpected error")
-            except OSError as e:
-                logging.exception(f"Error: {e}")
         if not isinstance(payload, dict):
             raise ValueError("Invalid translation catalog")
         return {
@@ -51,13 +43,16 @@ def translation(key: str, language: str = "ar") -> str:
     return (
         _read_catalog(selected).get(key)
         or _read_catalog("ar").get(key)
+        or LABELS.get(key, (fallback, fallback))[selected == "en"]
         or fallback
     )
 
 
 def catalog(language: str) -> dict[str, str]:
     selected = validate_language(language)
-    keys = _read_catalog("ar").keys() | _read_catalog("en").keys()
+    keys = (
+        _read_catalog("ar").keys() | _read_catalog("en").keys() | LABELS.keys()
+    )
     return {key: translation(key, selected) for key in keys}
 
 

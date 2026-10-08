@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from app.locales.catalog import (
+    _read_catalog,
     catalog,
     language_direction,
     translation,
@@ -21,8 +22,6 @@ from app.states.auth import AuthState
 
 class LocaleTests(unittest.TestCase):
     def test_utf8_json_matching_keys_and_nonempty_values(self):
-        catalog("ar")
-        catalog("en")
         folder = Path(__file__).parent / "locales"
         ar = json.loads((folder / "ar.json").read_text(encoding="utf-8"))
         en = json.loads((folder / "en.json").read_text(encoding="utf-8"))
@@ -37,6 +36,45 @@ class LocaleTests(unittest.TestCase):
             self.assertNotEqual(en[key], key)
         self.assertEqual(ar["nav.accounts"], "الحسابات")
         self.assertEqual(en["nav.accounts"], "Accounts")
+
+    def test_catalog_reads_only_existing_json_without_writes(self):
+        _read_catalog.cache_clear()
+        try:
+            with (
+                patch.object(
+                    Path, "read_text", return_value='{"key": "value"}'
+                ) as read,
+                patch.object(Path, "open") as opened,
+            ):
+                self.assertEqual(_read_catalog("en"), {"key": "value"})
+                read.assert_called_once_with(encoding="utf-8")
+                opened.assert_not_called()
+            _read_catalog.cache_clear()
+            with (
+                patch.object(
+                    Path, "read_text", side_effect=FileNotFoundError
+                ) as read,
+                patch.object(Path, "open") as opened,
+                self.assertLogs(level="ERROR"),
+            ):
+                self.assertEqual(_read_catalog("en"), {})
+                read.assert_called_once_with(encoding="utf-8")
+                opened.assert_not_called()
+            tree = ast.parse(
+                (Path(__file__).parent / "locales/catalog.py").read_text(
+                    encoding="utf-8"
+                )
+            )
+            literals = {
+                node.value
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, str)
+            }
+            self.assertIn(".json", literals)
+            self.assertNotIn(".txt", literals)
+        finally:
+            _read_catalog.cache_clear()
 
     def test_all_literal_ui_keys_exist(self):
         folder = Path(__file__).parent / "components"
@@ -140,7 +178,26 @@ class BilingualShellTests(unittest.TestCase):
             self.assertIn("font-sans", rendered)
             self.assertIn("Tajawal", rendered)
             self.assertIn("#f6f4ec", rendered)
-            self.assertIn("hydrate_language", rendered)
+            self.assertIn("on_mount", component.event_triggers)
+            mounted_events = component.event_triggers["on_mount"].events
+            hydration_events = [
+                event
+                for event in mounted_events
+                if event.handler.fn is LanguageState.hydrate_language.fn
+            ]
+            self.assertTrue(
+                hydration_events, "Root mount must validate the language cookie"
+            )
+            for preference, expected in (
+                ("en", "en"),
+                ("ar", "ar"),
+                ("fr", "ar"),
+            ):
+                state = SimpleNamespace(preference=preference)
+                for event in hydration_events:
+                    self.assertEqual(event.args, ())
+                    event.handler.fn(state)
+                self.assertEqual(state.preference, expected)
             self.assertIn("language.ar", rendered)
             self.assertIn("language.en", rendered)
         self.assertIn("bottom-0", str(shell(rx.el.p("Test"))))
@@ -157,14 +214,14 @@ class BilingualShellTests(unittest.TestCase):
         ):
             rendered = str(auth_page(registering, handler))
             for name in ("email", "password"):
-                self.assertIn(f'name="{name}"', rendered)
+                self.assertIn(f'name:"{name}"', rendered)
             self.assertIn("auth.email", rendered)
             self.assertIn("auth.password", rendered)
             self.assertIn("auth.register_title", rendered)
             self.assertIn("auth.login_title", rendered)
             if registering:
                 for name in ("name", "confirm", "terms"):
-                    self.assertIn(f'name="{name}"', rendered)
+                    self.assertIn(f'name:"{name}"', rendered)
 
 
 if __name__ == "__main__":

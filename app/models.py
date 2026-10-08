@@ -344,6 +344,10 @@ class HouseholdMembership(Record, Base):
     can_edit_budgets: Mapped[bool] = mapped_column(
         Boolean, default=True, server_default=text("true"), nullable=False
     )
+    # Application authorization grants owners access regardless of this opt-in flag.
+    can_view_commitments: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
     joined_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -402,6 +406,9 @@ class FinancialAccount(Record, Base):
     __tablename__ = "mh_financial_accounts"
     __table_args__ = (
         UniqueConstraint("household_id", "id", name="uq_mh_account_tenant_id"),
+        CheckConstraint(
+            "scope IS NULL OR scope IN ('personal', 'shared')", name="scope"
+        ),
         ForeignKeyConstraint(
             ["household_id", "created_by_user_id"],
             [
@@ -439,6 +446,9 @@ class FinancialAccount(Record, Base):
     )
     currency: Mapped[str] = mapped_column(
         String(3), default="SAR", server_default="SAR"
+    )
+    scope: Mapped[str | None] = mapped_column(
+        String(10), default=None, nullable=True
     )
     opening_balance: Mapped[Decimal] = mapped_column(
         Numeric(19, 4), default=Decimal("0"), server_default="0"
@@ -660,6 +670,19 @@ class Transaction(Record, Base):
             "household_id", "id", name="uq_mh_transaction_tenant_id"
         ),
         ForeignKeyConstraint(
+            ["household_id", "paid_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            name="fk_mh_transactions_payer_membership",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "scope IS NULL OR scope IN ('personal', 'shared')", name="scope"
+        ),
+        Index("ix_mh_transactions_payer", "household_id", "paid_by_user_id"),
+        ForeignKeyConstraint(
             ["household_id", "account_id"],
             ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
             ondelete="RESTRICT",
@@ -751,6 +774,13 @@ class Transaction(Record, Base):
     description: Mapped[str] = mapped_column(
         Text, default="", server_default=""
     )
+    scope: Mapped[str | None] = mapped_column(
+        String(10), default=None, nullable=True
+    )
+    # Explicitly documented payer only; never derived from the record creator.
+    paid_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
     recurring_rule_id: Mapped[UUID | None] = mapped_column(Uuid, default=None)
     scheduled_for: Mapped[date | None] = mapped_column(Date, default=None)
     deleted_at: Mapped[datetime | None] = mapped_column(
@@ -762,7 +792,9 @@ class Transaction(Record, Base):
     )
     category: Mapped["Category"] = relationship(viewonly=True, lazy="raise")
     creator_membership: Mapped["HouseholdMembership"] = relationship(
-        viewonly=True, lazy="raise"
+        foreign_keys=[household_id, created_by_user_id],
+        viewonly=True,
+        lazy="raise",
     )
     recurring_rule: Mapped["RecurringTransactionRule | None"] = relationship(
         viewonly=True, lazy="raise"
@@ -1583,6 +1615,364 @@ class Notification(Record, Base):
     invitation: Mapped["PartnerInvitation | None"] = relationship(
         viewonly=True, lazy="raise"
     )
+
+
+class HouseholdTask(Record, Base):
+    __tablename__ = "mh_household_tasks"
+    __table_args__ = (
+        UniqueConstraint("household_id", "id", name="uq_mh_task_tenant_id"),
+        ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            name="fk_mh_tasks_creator_membership",
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "assignee_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            name="fk_mh_tasks_assignee_membership",
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint("length(trim(title)) > 0", name="title_required"),
+        CheckConstraint("status IN ('pending', 'complete')", name="status"),
+        Index(
+            "ix_mh_tasks_tenant_status_due",
+            "household_id",
+            "status",
+            "due_date",
+        ),
+        Index("ix_mh_tasks_tenant_account", "household_id", "account_id"),
+        Index(
+            "ix_mh_tasks_tenant_creator", "household_id", "created_by_user_id"
+        ),
+        Index(
+            "ix_mh_tasks_tenant_assignee", "household_id", "assignee_user_id"
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Linked tasks must inherit account visibility in application authorization.
+    account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    assignee_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    details: Mapped[str] = mapped_column(
+        Text, default="", server_default="", nullable=False
+    )
+    due_date: Mapped[date | None] = mapped_column(
+        Date, default=None, nullable=True
+    )
+    status: Mapped[str] = mapped_column(
+        String(10), default="pending", server_default="pending", nullable=False
+    )
+
+
+class BillSplitRule(Record, Base):
+    __tablename__ = "mh_bill_split_rules"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "id", name="uq_mh_bill_split_rule_tenant_id"
+        ),
+        UniqueConstraint(
+            "household_id", "bill_id", name="uq_mh_bill_split_rule_bill"
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "bill_id"],
+            ["mh_bills.household_id", "mh_bills.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint("mode IN ('equal', 'income')", name="mode"),
+        Index(
+            "ix_mh_bill_split_rules_creator",
+            "household_id",
+            "created_by_user_id",
+        ),
+        Index("ix_mh_bill_split_rules_currency", "household_id", "currency"),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    bill_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    mode: Mapped[str] = mapped_column(
+        String(10), default="equal", server_default="equal", nullable=False
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+
+
+class BillSplitShare(Record, Base):
+    __tablename__ = "mh_bill_split_shares"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id",
+            "rule_id",
+            "member_user_id",
+            name="uq_mh_bill_split_share_member",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "rule_id"],
+            ["mh_bill_split_rules.household_id", "mh_bill_split_rules.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "member_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "percentage BETWEEN 0 AND 100 AND percentage <> 'NaN'::numeric",
+            name="percentage_range",
+        ),
+        CheckConstraint(
+            "declared_income IS NULL OR (declared_income >= 0 "
+            "AND declared_income < 'Infinity'::numeric AND declared_income <> 'NaN'::numeric)",
+            name="nonnegative_finite_income",
+        ),
+        CheckConstraint(
+            "share_amount >= 0 AND share_amount < 'Infinity'::numeric "
+            "AND share_amount <> 'NaN'::numeric",
+            name="nonnegative_finite_share",
+        ),
+        Index(
+            "ix_mh_bill_split_shares_member", "household_id", "member_user_id"
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    rule_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    member_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    percentage: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
+    # Preserve the declared income snapshot, not a live link to financial totals.
+    declared_income: Mapped[Decimal | None] = mapped_column(
+        Numeric(19, 4), default=None, nullable=True
+    )
+    # Persist the explicitly calculated snapshot; this does not record a payment.
+    share_amount: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), nullable=False
+    )
+
+
+class SafeBalanceSetting(Record, Base):
+    __tablename__ = "mh_safe_balance_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id",
+            "user_id",
+            "currency",
+            name="uq_mh_safe_balance_person_currency",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint("payday_day BETWEEN 1 AND 31", name="payday_day_range"),
+        CheckConstraint(
+            "monthly_essentials >= 0 AND monthly_essentials < 'Infinity'::numeric "
+            "AND monthly_essentials <> 'NaN'::numeric",
+            name="nonnegative_finite_essentials",
+        ),
+        CheckConstraint(
+            "additional_due_allocation IS NULL OR (additional_due_allocation >= 0 "
+            "AND additional_due_allocation < 'Infinity'::numeric "
+            "AND additional_due_allocation <> 'NaN'::numeric)",
+            name="nonnegative_finite_allocation",
+        ),
+        Index("ix_mh_safe_balance_settings_user", "user_id", "household_id"),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    payday_day: Mapped[int] = mapped_column(Integer, nullable=False)
+    monthly_essentials: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), default=Decimal("0"), server_default="0", nullable=False
+    )
+    additional_due_allocation: Mapped[Decimal | None] = mapped_column(
+        Numeric(19, 4), default=None, nullable=True
+    )
+
+
+class SeasonalFund(Record, Base):
+    __tablename__ = "mh_seasonal_funds"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id", "id", name="uq_mh_seasonal_fund_tenant_id"
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "paid_transaction_id"],
+            ["mh_transactions.household_id", "mh_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "created_by_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint("length(trim(title)) > 0", name="title_required"),
+        CheckConstraint(
+            "target_amount > 0 AND target_amount < 'Infinity'::numeric "
+            "AND target_amount <> 'NaN'::numeric",
+            name="positive_finite_target",
+        ),
+        CheckConstraint(
+            "contribution_amount > 0 AND contribution_amount < 'Infinity'::numeric "
+            "AND contribution_amount <> 'NaN'::numeric",
+            name="positive_finite_contribution",
+        ),
+        CheckConstraint(
+            "target_date >= reserve_start_date", name="target_after_start"
+        ),
+        CheckConstraint("frequency IN ('monthly', 'weekly')", name="frequency"),
+        CheckConstraint(
+            "status IN ('active', 'paid', 'archived')", name="status"
+        ),
+        CheckConstraint(
+            "paid_transaction_id IS NULL OR status IN ('paid', 'archived')",
+            name="paid_reference_status",
+        ),
+        Index(
+            "ix_mh_seasonal_funds_currency_status_target",
+            "household_id",
+            "currency",
+            "status",
+            "target_date",
+        ),
+        Index("ix_mh_seasonal_funds_account", "household_id", "account_id"),
+        Index(
+            "ix_mh_seasonal_funds_payment",
+            "household_id",
+            "paid_transaction_id",
+        ),
+        Index(
+            "ix_mh_seasonal_funds_creator", "household_id", "created_by_user_id"
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
+    created_by_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    target_amount: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), nullable=False
+    )
+    target_date: Mapped[date] = mapped_column(Date, nullable=False)
+    # Reservations are derived for display only, never posted as transactions.
+    contribution_amount: Mapped[Decimal] = mapped_column(
+        Numeric(19, 4), nullable=False
+    )
+    reserve_start_date: Mapped[date] = mapped_column(Date, nullable=False)
+    frequency: Mapped[str] = mapped_column(
+        String(10), default="monthly", server_default="monthly", nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(10), default="active", server_default="active", nullable=False
+    )
+    paid_transaction_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
+
+
+class TransactionSplitShare(Record, Base):
+    __tablename__ = "mh_transaction_split_shares"
+    __table_args__ = (
+        UniqueConstraint(
+            "household_id",
+            "transaction_id",
+            "member_user_id",
+            name="uq_mh_transaction_split_share_member",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "transaction_id"],
+            ["mh_transactions.household_id", "mh_transactions.id"],
+            ondelete="RESTRICT",
+        ),
+        ForeignKeyConstraint(
+            ["household_id", "member_user_id"],
+            [
+                "mh_household_memberships.household_id",
+                "mh_household_memberships.user_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency_code"),
+        CheckConstraint(
+            "owed_amount >= 0 AND owed_amount < 'Infinity'::numeric "
+            "AND owed_amount <> 'NaN'::numeric",
+            name="nonnegative_finite_owed",
+        ),
+        CheckConstraint(
+            "percentage BETWEEN 0 AND 100 AND percentage <> 'NaN'::numeric",
+            name="percentage_range",
+        ),
+        Index(
+            "ix_mh_transaction_split_shares_member_currency",
+            "household_id",
+            "member_user_id",
+            "currency",
+        ),
+    )
+    household_id: Mapped[UUID] = mapped_column(
+        ForeignKey("mh_households.id", ondelete="RESTRICT"), nullable=False
+    )
+    transaction_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    member_user_id: Mapped[UUID] = mapped_column(Uuid, nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    # Documented shares only; no creator-based inference or automatic settlement.
+    owed_amount: Mapped[Decimal] = mapped_column(Numeric(19, 4), nullable=False)
+    percentage: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
 
 
 class NotificationPreference(Record, Base):

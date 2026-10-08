@@ -153,6 +153,33 @@ class MemberAccessTests(unittest.IsolatedAsyncioTestCase):
         self.db.execute.assert_not_called()
         self.db.scalars.assert_not_called()
 
+    async def test_disclosure_default_off_owner_only_and_no_role_assignment(
+        self,
+    ):
+        await MemberAccessState.load.fn(self.state)
+        self.assertFalse(self.state.members[0]["can_view_commitments"])
+        self.partner.can_view_commitments = False
+        await MemberAccessState.toggle_permission.fn(
+            self.state, str(self.partner_id), "can_view_commitments"
+        )
+        self.assertTrue(self.partner.can_view_commitments)
+        self.assertEqual(self.partner.role, "partner")
+        await MemberAccessState.toggle_permission.fn(
+            self.state, str(self.partner_id), "can_view_commitments"
+        )
+        self.assertFalse(self.partner.can_view_commitments)
+        self.db.commit.reset_mock()
+        self.auth._household.return_value = (
+            SimpleNamespace(id=self.partner_id),
+            self.partner,
+        )
+        await MemberAccessState.toggle_permission.fn(
+            self.state, str(self.partner_id), "can_view_commitments"
+        )
+        self.assertTrue(self.state.error)
+        self.db.commit.assert_not_called()
+        self.assertFalse(self.partner.can_view_commitments)
+
     async def test_independent_permissions_persist_and_reload(self):
         await MemberAccessState.toggle_permission.fn(
             self.state, str(self.partner_id), "can_add_transactions"

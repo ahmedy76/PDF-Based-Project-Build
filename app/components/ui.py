@@ -25,6 +25,11 @@ NAV = [
     {"label": "nav.debts", "path": "/debts", "icon": "hand-coins"},
     {"label": "nav.bills", "path": "/bills", "icon": "receipt-text"},
     {
+        "label": "nav.family_planning",
+        "path": "/family-planning",
+        "icon": "list-checks",
+    },
+    {
         "label": "nav.reports",
         "path": "/reports",
         "icon": "chart-no-axes-combined",

@@ -1,6 +1,7 @@
 import reflex as rx
 
 from app.components.ui import CARD
+from app.locales.catalog import t
 from app.states.member_access import (
     AccountAccess,
     MemberAccess,
@@ -12,9 +13,21 @@ def account_switch(
     member: MemberAccess, account: AccountAccess
 ) -> rx.Component:
     return rx.el.div(
+        permission_switch(
+            member,
+            t("planning.disclosure"),
+            "can_view_commitments",
+            member["can_view_commitments"],
+        ),
+        rx.el.p(
+            t("planning.disclosure_help"),
+            class_name="mt-2 text-sm leading-6 text-[#7c8178]",
+        ),
         rx.el.div(
+            rx.icon("wallet", class_name="h-4 w-4 text-[#62704b]"),
             rx.el.span(
-                account["name"], class_name="font-medium text-[#27394a]"
+                account["name"],
+                class_name="ms-2 font-medium text-[#27394a]",
             ),
             rx.el.span(
                 account["currency"],
@@ -50,7 +63,7 @@ def permission_switch(
     return rx.el.div(
         rx.el.span(label, class_name="text-sm font-medium text-[#27394a]"),
         rx.el.button(
-            rx.cond(enabled, "مسموح ✓", "غير مسموح"),
+            rx.cond(enabled, t("planning.allowed"), t("planning.denied")),
             on_click=lambda: M.toggle_permission(member["id"], permission),
             aria_label=f"{label} للعضو {member['name']}",
             aria_pressed=enabled,
