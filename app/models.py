@@ -1028,6 +1028,17 @@ class Debt(Record, Base):
     __table_args__ = (
         UniqueConstraint("household_id", "id", name="uq_mh_debt_tenant_id"),
         ForeignKeyConstraint(
+            ["household_id", "account_id"],
+            ["mh_financial_accounts.household_id", "mh_financial_accounts.id"],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint(
+            "(account_id IS NULL AND currency IS NULL) OR "
+            "(account_id IS NOT NULL AND currency IS NOT NULL "
+            "AND currency ~ '^[A-Z]{3}$')",
+            name="account_currency_consistency",
+        ),
+        ForeignKeyConstraint(
             ["household_id", "created_by_user_id"],
             [
                 "mh_household_memberships.household_id",
@@ -1051,6 +1062,7 @@ class Debt(Record, Base):
             "installment_count BETWEEN 1 AND 120", name="installment_count"
         ),
         Index("ix_mh_debts_household_archived", "household_id", "is_archived"),
+        Index("ix_mh_debts_household_account", "household_id", "account_id"),
     )
     household_id: Mapped[UUID] = mapped_column(
         ForeignKey("mh_households.id", ondelete="RESTRICT"),
@@ -1059,6 +1071,13 @@ class Debt(Record, Base):
     )
     created_by_user_id: Mapped[UUID] = mapped_column(
         Uuid, default=None, nullable=False
+    )
+    # Legacy debts remain unassigned until account and currency are explicit.
+    account_id: Mapped[UUID | None] = mapped_column(
+        Uuid, default=None, nullable=True
+    )
+    currency: Mapped[str | None] = mapped_column(
+        String(3), default=None, nullable=True
     )
     direction: Mapped[str] = mapped_column(String(10), nullable=False)
     title: Mapped[str] = mapped_column(String(120), nullable=False)
