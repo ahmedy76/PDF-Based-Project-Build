@@ -25,6 +25,16 @@ from app.states.auth import (
 
 import logging
 
+ACCOUNT_COLORS = (
+    "#62704b",
+    "#27394a",
+    "#a26550",
+    "#c49a3a",
+    "#4f7a8a",
+    "#8a5a83",
+    "#7c8178",
+)
+
 
 def next_recurring_date(
     current: date, start: date, frequency: str
@@ -80,6 +90,7 @@ class LedgerState(rx.State):
     accounts: list[dict[str, str]] = []
     archived_accounts: list[dict[str, str]] = []
     archived_total: str = "0.00"
+    currency_totals: list[dict[str, str]] = []
     has_archived_balance: bool = False
     closing_name: str = ""
     closing_balance: str = ""
@@ -138,6 +149,8 @@ class LedgerState(rx.State):
         "currency": "SAR",
         "opening_balance": "0",
         "opening_date": "",
+        "color": "",
+        "notes": "",
         "account_id": "",
         "category_id": "",
         "kind": "expense",
@@ -918,6 +931,8 @@ class LedgerState(rx.State):
                 "opening_balance": str(a.opening_balance),
                 "opening_date": a.opening_date.isoformat(),
                 "balance": f"{balances[a.id]:,.2f}",
+                "color": getattr(a, "color", None) or "",
+                "notes": getattr(a, "notes", None) or "",
             }
             for a in accounts
         ]
@@ -951,6 +966,16 @@ class LedgerState(rx.State):
             and balances[a.id] != 0
             for a in accounts
         )
+        currency_totals: dict[str, Decimal] = {}
+        for a in accounts:
+            if not a.is_archived:
+                currency_totals[a.currency] = (
+                    currency_totals.get(a.currency, Decimal(0)) + balances[a.id]
+                )
+        self.currency_totals = [
+            {"currency": code, "total": f"{amount:,.2f}"}
+            for code, amount in sorted(currency_totals.items())
+        ]
         self.transactions = [
             {
                 "id": str(t.id),
@@ -1224,6 +1249,7 @@ class LedgerState(rx.State):
         ) = "0.00"
         self.report_income = self.report_expense = self.report_saving = "0.00"
         self.has_archived_balance = False
+        self.currency_totals = []
         self.owner = self.can_add_transactions = self.can_edit_budgets = False
         self.budget_alert_note = ""
         self.history_id = self.history_title = self.history_legacy = ""
@@ -1389,6 +1415,16 @@ class LedgerState(rx.State):
             report_unexpected("ledger.set_budget_month", e)
             self.message = "اختر شهرًا صالحًا."
 
+    @staticmethod
+    def _account_details(data: dict[str, Any]) -> tuple[str | None, str | None]:
+        color = str(data.get("color", "") or "").strip().lower()
+        if color and color not in ACCOUNT_COLORS:
+            raise ValueError("اختر لونًا من القائمة.")
+        notes = str(data.get("notes", "") or "").strip()
+        if len(notes) > 500:
+            raise ValueError("الملاحظات لا تتجاوز 500 حرف.")
+        return color or None, notes or None
+
     @rx.event
     def open_editor(self, kind: str, record_id: str = ""):
         self._prepare_editor(kind, record_id)
@@ -1403,6 +1439,8 @@ class LedgerState(rx.State):
             "currency": self.currency,
             "opening_balance": "0",
             "opening_date": today,
+            "color": "",
+            "notes": "",
             "account_id": "",
             "category_id": "",
             "kind": "expense",
@@ -1960,6 +1998,7 @@ class LedgerState(rx.State):
                             "تاريخ الافتتاح يجب أن يسبق معاملات الحساب وتحويلاته."
                         )
                     record.name, record.account_type = name, kind
+                    record.color, record.notes = self._account_details(data)
                     record.opening_balance = self._money(
                         str(data.get("opening_balance", "0"))
                     )

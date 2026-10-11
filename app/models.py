@@ -426,6 +426,12 @@ class FinancialAccount(Record, Base):
         CheckConstraint(
             "opening_balance <> 'NaN'::numeric", name="finite_balance"
         ),
+        CheckConstraint(
+            "color IS NULL OR color ~ '^#[0-9a-f]{6}$'", name="color_hex"
+        ),
+        CheckConstraint(
+            "notes IS NULL OR length(notes) <= 500", name="notes_length"
+        ),
         Index(
             "ix_mh_accounts_household_archived", "household_id", "is_archived"
         ),
@@ -458,6 +464,12 @@ class FinancialAccount(Record, Base):
     )
     is_archived: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
+    )
+    color: Mapped[str | None] = mapped_column(
+        String(7), default=None, nullable=True
+    )
+    notes: Mapped[str | None] = mapped_column(
+        String(500), default=None, nullable=True
     )
     household: Mapped["Household"] = relationship(viewonly=True, lazy="raise")
     creator_membership: Mapped["HouseholdMembership"] = relationship(

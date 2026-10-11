@@ -666,6 +666,35 @@ def editor() -> rx.Component:
                                     "date",
                                     S.draft["opening_date"],
                                 ),
+                                select_field(
+                                    "لون الحساب (اختياري)",
+                                    "color",
+                                    [
+                                        {"id": "", "name": "بدون لون"},
+                                        {"id": "#62704b", "name": "زيتوني"},
+                                        {"id": "#27394a", "name": "كحلي"},
+                                        {"id": "#a26550", "name": "طوبي"},
+                                        {"id": "#c49a3a", "name": "خردلي"},
+                                        {"id": "#4f7a8a", "name": "أزرق مخضر"},
+                                        {"id": "#8a5a83", "name": "بنفسجي"},
+                                        {"id": "#7c8178", "name": "رمادي"},
+                                    ],
+                                    S.draft["color"],
+                                ),
+                                rx.el.label(
+                                    rx.el.span(
+                                        "ملاحظات (اختياري، حتى 500 حرف)",
+                                        class_name="mb-2 block text-sm font-semibold text-[#465344]",
+                                    ),
+                                    rx.el.textarea(
+                                        name="notes",
+                                        default_value=S.draft["notes"],
+                                        max_length=500,
+                                        rows=3,
+                                        class_name=INPUT,
+                                    ),
+                                    class_name="block min-w-0",
+                                ),
                                 rx.el.p(
                                     "اختر العملة بعناية؛ لا يمكن تغييرها بعد إنشاء الحساب. الرصيد الحالي = الافتتاحي + الدخل − المصروف − التحويلات الصادرة + التحويلات الواردة بنفس العملة.",
                                     class_name="text-xs leading-6 text-[#7c8178]",
