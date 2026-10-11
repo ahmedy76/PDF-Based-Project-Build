@@ -383,11 +383,29 @@ def active_account_card(a: dict[str, str]) -> rx.Component:
             ),
             class_name="mb-5 flex justify-between",
         ),
-        rx.el.h3(a["name"], class_name="text-xl font-bold"),
+        rx.el.h3(
+            rx.cond(
+                a["color"] != "",
+                rx.el.span(
+                    class_name="inline-block h-3 w-3 shrink-0 rounded-full",
+                    style={"background_color": a["color"]},
+                    aria_hidden="true",
+                ),
+            ),
+            a["name"],
+            class_name="flex items-center gap-2 text-xl font-bold",
+        ),
         rx.el.div(
             rx.el.strong(a["balance"], class_name="text-3xl tabular-nums"),
             rx.el.span(a["currency"], class_name="text-sm text-[#7c8178]"),
             class_name="my-5 flex items-baseline gap-2",
+        ),
+        rx.cond(
+            a["notes"] != "",
+            rx.el.p(
+                a["notes"],
+                class_name="mb-4 whitespace-pre-line break-words text-sm text-[#7c8178]",
+            ),
         ),
         rx.el.div(
             edit_actions("account", a),
@@ -622,6 +640,38 @@ def accounts() -> rx.Component:
                     class_name="flex flex-wrap gap-2",
                 ),
                 class_name="flex flex-wrap items-start justify-between gap-4",
+            ),
+            rx.cond(
+                S.currency_totals.length() > 0,
+                rx.el.section(
+                    rx.el.h2(
+                        t("accounts.totals"),
+                        class_name="mb-3 text-xl font-bold",
+                    ),
+                    rx.el.ul(
+                        rx.foreach(
+                            S.currency_totals,
+                            lambda row: rx.el.li(
+                                rx.el.strong(
+                                    row["total"],
+                                    class_name="text-2xl tabular-nums",
+                                ),
+                                rx.el.span(
+                                    row["currency"],
+                                    class_name="text-sm text-[#7c8178]",
+                                ),
+                                class_name="flex items-baseline gap-2 rounded-2xl border border-[#e2ded2] bg-[#fffdf8] px-5 py-4",
+                                key=row["currency"],
+                            ),
+                        ),
+                        class_name="flex flex-wrap gap-3",
+                    ),
+                    rx.el.p(
+                        t("accounts.totals_note"),
+                        class_name="mt-2 text-sm text-[#7c8178]",
+                    ),
+                    class_name="mb-9 mt-6",
+                ),
             ),
             rx.el.section(
                 rx.el.h2(
