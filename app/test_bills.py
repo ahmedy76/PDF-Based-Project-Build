@@ -187,6 +187,8 @@ class BillTests(unittest.TestCase):
             created_by_user_id=self.user.id,
             direction="payable",
             title="قرض الأسرة",
+            account_id=self.account.id,
+            currency=self.account.currency,
             counterparty="البنك",
             principal=Decimal("20"),
             first_due_date=due,
@@ -212,6 +214,36 @@ class BillTests(unittest.TestCase):
         self.db.flush()
         self.state._load(self.db, self.member, self.user.id)
         self.assertEqual(len(self.state.reminders), 2)
+        self.assertEqual(
+            next(r for r in self.state.reminders if r["kind"] == "installment")[
+                "currency"
+            ],
+            "USD",
+        )
+        debt.account_id = None
+        debt.currency = None
+        self.db.flush()
+        self.state._load(self.db, self.member, self.user.id)
+        self.assertEqual([r["kind"] for r in self.state.reminders], ["bill"])
+        debt.account_id = self.account.id
+        debt.currency = "USD"
+        self.account.is_archived = True
+        self.db.flush()
+        self.state._load(self.db, self.member, self.user.id)
+        self.assertEqual(self.state.reminders, [])
+        self.account.is_archived = False
+        self.db.add(
+            m.HouseholdAccountRestriction(
+                household_id=self.home.id,
+                member_user_id=self.partner.id,
+                account_id=self.account.id,
+            )
+        )
+        self.db.flush()
+        self.state._load(self.db, self.partner_member, self.partner.id)
+        self.assertEqual(self.state.reminders, [])
+        self.state._load(self.db, self.other_member, self.other.id)
+        self.assertEqual(self.state.reminders, [])
         self.state._load(self.db, self.member, self.user.id)
         self.assertEqual(len(self.state.reminders), 2)
         self.assertEqual(

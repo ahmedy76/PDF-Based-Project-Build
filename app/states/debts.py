@@ -8,10 +8,15 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, TypedDict
 from uuid import UUID
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, and_, or_
 
 from app import models as m
-from app.states.auth import AuthState
+from app.states.auth import (
+    AuthState,
+    require_account,
+    require_permission,
+    visible_account_ids,
+)
 
 import logging
 
@@ -34,6 +39,10 @@ class PaymentRow(TypedDict):
 
 
 class DebtRow(TypedDict):
+    account_id: str
+    account: str
+    currency: str
+    linked: bool
     id: str
     title: str
     direction: str
@@ -113,11 +122,28 @@ def schedule(
     return result
 
 
+def debt_scope(db, member, *, active: bool = False):
+    accounts = db.scalars(
+        select(m.FinancialAccount).where(
+            m.FinancialAccount.household_id == member.household_id,
+            *([m.FinancialAccount.is_archived.is_(False)] if active else []),
+        )
+    ).all()
+    visible = visible_account_ids(db, member, accounts)
+    linked = and_(m.Debt.account_id.in_(visible), m.Debt.currency.is_not(None))
+    legacy = and_(m.Debt.account_id.is_(None), m.Debt.currency.is_(None))
+    return (
+        or_(linked, legacy) if member.role == "owner" and not active else linked
+    )
+
+
 class DebtState(rx.State):
     debts: list[DebtRow] = []
     archived_debts: list[DebtRow] = []
-    payable_total: str = "0.0000"
-    receivable_total: str = "0.0000"
+    accounts: list[dict[str, str]] = []
+    currency_totals: list[dict[str, str]] = []
+    legacy_count: int = 0
+    selected_currency: str = "عملة غير محددة"
     overdue_count: int = 0
     payable_overdue_count: int = 0
     receivable_overdue_count: int = 0
@@ -135,6 +161,7 @@ class DebtState(rx.State):
         "first_due_date": "",
         "installment_count": "1",
         "note": "",
+        "account_id": "",
     }
 
     @rx.var
@@ -164,19 +191,48 @@ class DebtState(rx.State):
             .with_for_update()
         )
         member = db.scalar(
-            select(m.HouseholdMembership.id).where(
+            select(m.HouseholdMembership).where(
                 m.HouseholdMembership.household_id == hid,
                 m.HouseholdMembership.user_id == uid,
                 m.HouseholdMembership.status == "active",
             )
         )
-        if household is None or member is None:
+        if (
+            household is None
+            or member is None
+            or member.role not in ("owner", "partner")
+        ):
             raise PermissionError("لا توجد عضوية أسرة نشطة.")
+        return member
 
-    def _debt(self, db, hid: UUID, raw: str) -> m.Debt:
+    def _account(self, db, member, raw: str) -> m.FinancialAccount:
+        if not raw:
+            raise ValueError(
+                "اختر حسابًا نشطًا ظاهرًا؛ عملة الدين تُحدد من الحساب، دون تخمين."
+            )
+        account = db.scalar(
+            select(m.FinancialAccount)
+            .where(
+                m.FinancialAccount.household_id == member.household_id,
+                m.FinancialAccount.id == self._uuid(raw),
+                m.FinancialAccount.is_archived.is_(False),
+            )
+            .with_for_update()
+        )
+        if account is None:
+            raise ValueError("الحساب غير متاح أو غير نشط في هذه الأسرة.")
+        require_account(db, member, account.id)
+        return account
+
+    def _debt(self, db, hid: UUID, raw: str, uid: UUID) -> m.Debt:
+        member = self._guard(db, hid, uid)
         debt = db.scalar(
             select(m.Debt)
-            .where(m.Debt.household_id == hid, m.Debt.id == self._uuid(raw))
+            .where(
+                m.Debt.household_id == hid,
+                m.Debt.id == self._uuid(raw),
+                debt_scope(db, member),
+            )
             .with_for_update()
         )
         if debt is None:
@@ -195,8 +251,23 @@ class DebtState(rx.State):
     def _save(
         self, db, hid: UUID, uid: UUID, data: dict[str, Any], edit_id: str = ""
     ):
-        self._guard(db, hid, uid)
-        debt = self._debt(db, hid, edit_id) if edit_id else None
+        member = self._guard(db, hid, uid)
+        require_permission(member, "can_add_transactions")
+        debt = self._debt(db, hid, edit_id, uid) if edit_id else None
+        account = (
+            self._account(db, member, str(data.get("account_id", "")))
+            if debt is None
+            else None
+        )
+        if debt is not None:
+            submitted = str(data.get("account_id", debt.account_id or ""))
+            if submitted != str(debt.account_id or "") or (
+                "currency" in data
+                and str(data["currency"]) != (debt.currency or "")
+            ):
+                raise ValueError(
+                    "لا يمكن نقل حساب أو عملة دين قائم؛ استخدم إسناد الدين القديم المنفصل دون تغيير الدفعات."
+                )
         if debt is not None and debt.is_archived:
             raise ValueError("استعد الدين المؤرشف قبل تعديله.")
         title = str(data.get("title", "")).strip()
@@ -250,6 +321,8 @@ class DebtState(rx.State):
             debt = m.Debt(
                 household_id=hid,
                 created_by_user_id=uid,
+                account_id=account.id,
+                currency=account.currency,
                 title=title,
                 counterparty=counterparty,
                 direction=direction,
@@ -296,10 +369,16 @@ class DebtState(rx.State):
     def _payment(
         self, db, hid: UUID, uid: UUID, debt_id: str, data: dict[str, Any]
     ):
-        self._guard(db, hid, uid)
-        debt = self._debt(db, hid, debt_id)
+        member = self._guard(db, hid, uid)
+        require_permission(member, "can_add_transactions")
+        debt = self._debt(db, hid, debt_id, uid)
         if debt.is_archived:
             raise ValueError("استعد الدين المؤرشف أولًا.")
+        if debt.account_id is None or debt.currency is None:
+            raise ValueError(
+                "أسند الدين القديم إلى حساب وعملة صراحة قبل تسجيل دفعات جديدة."
+            )
+        self._account(db, member, str(debt.account_id))
         amount = money(str(data.get("amount", "")))
         paid_on = parse_date(str(data.get("paid_on", "")), past_allowed=False)
         note = str(data.get("note", "")).strip()
@@ -320,8 +399,9 @@ class DebtState(rx.State):
         return entry
 
     def _void(self, db, hid: UUID, uid: UUID, debt_id: str, payment_id: str):
-        self._guard(db, hid, uid)
-        debt = self._debt(db, hid, debt_id)
+        member = self._guard(db, hid, uid)
+        require_permission(member, "can_add_transactions")
+        debt = self._debt(db, hid, debt_id, uid)
         if debt.is_archived:
             raise ValueError("استعد الدين المؤرشف قبل تصحيح دفعة.")
         payment = db.scalar(
@@ -341,8 +421,9 @@ class DebtState(rx.State):
         db.flush()
 
     def _archive(self, db, hid: UUID, uid: UUID, debt_id: str, archived: bool):
-        self._guard(db, hid, uid)
-        debt = self._debt(db, hid, debt_id)
+        member = self._guard(db, hid, uid)
+        require_permission(member, "can_add_transactions")
+        debt = self._debt(db, hid, debt_id, uid)
         if debt.is_archived == archived:
             raise ValueError("حالة الدين محدّثة بالفعل.")
         if archived and self._paid(db, hid, debt.id) != debt.principal:
@@ -350,20 +431,69 @@ class DebtState(rx.State):
         debt.is_archived = archived
         db.flush()
 
-    def _load(self, db, hid: UUID):
+    def _assign(
+        self, db, hid: UUID, uid: UUID, debt_id: str, data: dict[str, Any]
+    ):
+        member = self._guard(db, hid, uid)
+        if member.role != "owner":
+            raise ValueError("إسناد الديون القديمة متاح لمالك الأسرة فقط.")
+        debt = self._debt(db, hid, debt_id, uid)
+        if debt.account_id is not None or debt.currency is not None:
+            raise ValueError("الدين مسند بالفعل؛ لا يمكن تغيير حسابه أو عملته.")
+        account = self._account(db, member, str(data.get("account_id", "")))
+        history = db.scalar(
+            select(m.DebtPayment.id)
+            .where(
+                m.DebtPayment.household_id == hid,
+                m.DebtPayment.debt_id == debt.id,
+            )
+            .limit(1)
+        )
+        if history is not None and data.get("confirm_history") not in (
+            True,
+            "on",
+            "true",
+        ):
+            raise ValueError(
+                "أكّد صراحة أن جميع المبالغ والدفعات التاريخية كانت بعملة الحساب المختار؛ لا تحويل للعملة ولا تغيير للدفعات."
+            )
+        debt.account_id, debt.currency = account.id, account.currency
+        db.flush()
+        return debt
+
+    def _load(self, db, hid: UUID, uid: UUID):
+        member = self._guard(db, hid, uid)
+        accounts = db.scalars(
+            select(m.FinancialAccount).where(
+                m.FinancialAccount.household_id == hid,
+            )
+        ).all()
+        visible = visible_account_ids(db, member, accounts)
+        names = {a.id: a.name for a in accounts if a.id in visible}
+        self.accounts = [
+            {"id": str(a.id), "name": f"{a.name} · {a.currency}"}
+            for a in accounts
+            if a.id in visible and not a.is_archived
+        ]
         debts = db.scalars(
             select(m.Debt)
-            .where(m.Debt.household_id == hid)
+            .where(m.Debt.household_id == hid, debt_scope(db, member))
             .order_by(m.Debt.created_at.desc(), m.Debt.id.desc())
         ).all()
         installments = db.scalars(
             select(m.DebtInstallment)
-            .where(m.DebtInstallment.household_id == hid)
+            .where(
+                m.DebtInstallment.household_id == hid,
+                m.DebtInstallment.debt_id.in_([d.id for d in debts]),
+            )
             .order_by(m.DebtInstallment.debt_id, m.DebtInstallment.sequence_no)
         ).all()
         payments = db.scalars(
             select(m.DebtPayment)
-            .where(m.DebtPayment.household_id == hid)
+            .where(
+                m.DebtPayment.household_id == hid,
+                m.DebtPayment.debt_id.in_([d.id for d in debts]),
+            )
             .order_by(
                 m.DebtPayment.paid_on.desc(),
                 m.DebtPayment.created_at.desc(),
@@ -382,7 +512,8 @@ class DebtState(rx.State):
                 by_payments[item.debt_id].append(item)
         active: list[DebtRow] = []
         archived: list[DebtRow] = []
-        payable = receivable = Decimal("0")
+        totals: dict[str, dict[str, Decimal]] = {}
+        self.legacy_count = 0
         overdue_count = 0
         payable_overdue = receivable_overdue = 0
         today = date.today()
@@ -426,6 +557,11 @@ class DebtState(rx.State):
                 )
             outstanding = debt.principal - paid
             row: DebtRow = {
+                "account_id": str(debt.account_id or ""),
+                "account": names.get(debt.account_id, "حساب غير مسند"),
+                "currency": debt.currency or "عملة غير محددة",
+                "linked": debt.account_id is not None
+                and debt.currency is not None,
                 "id": str(debt.id),
                 "title": debt.title,
                 "direction": debt.direction,
@@ -465,18 +601,28 @@ class DebtState(rx.State):
                 archived.append(row)
             else:
                 active.append(row)
+                if debt.currency is not None:
+                    bucket = totals.setdefault(
+                        debt.currency,
+                        {"payable": Decimal(0), "receivable": Decimal(0)},
+                    )
+                    bucket[debt.direction] += outstanding
+                else:
+                    self.legacy_count += 1
                 if debt.direction == "payable":
-                    payable += outstanding
                     payable_overdue += int(overdue > 0)
                 else:
-                    receivable += outstanding
                     receivable_overdue += int(overdue > 0)
                 overdue_count += int(overdue > 0)
         self.debts, self.archived_debts = active, archived
-        self.payable_total, self.receivable_total = (
-            f"{payable:,.4f}",
-            f"{receivable:,.4f}",
-        )
+        self.currency_totals = [
+            {
+                "currency": code,
+                "payable": f"{values['payable']:,.4f}",
+                "receivable": f"{values['receivable']:,.4f}",
+            }
+            for code, values in sorted(totals.items())
+        ]
         self.overdue_count = overdue_count
         self.payable_overdue_count, self.receivable_overdue_count = (
             payable_overdue,
@@ -486,7 +632,8 @@ class DebtState(rx.State):
     @rx.event
     async def load(self):
         self.debts, self.archived_debts = [], []
-        self.payable_total = self.receivable_total = "0.0000"
+        self.currency_totals, self.accounts = [], []
+        self.legacy_count = 0
         self.overdue_count = self.payable_overdue_count = (
             self.receivable_overdue_count
         ) = 0
@@ -498,8 +645,8 @@ class DebtState(rx.State):
             async with rx.asession() as db:
 
                 def load_sync(sync_db):
-                    _, member = auth._household(sync_db)
-                    self._load(sync_db, member.household_id)
+                    user, member = auth._household(sync_db)
+                    self._load(sync_db, member.household_id, user.id)
 
                 await db.run_sync(load_sync)
         except PermissionError:
@@ -527,13 +674,16 @@ class DebtState(rx.State):
             "first_due_date": "",
             "installment_count": "1",
             "note": "",
+            "account_id": self.accounts[0]["id"] if self.accounts else "",
         }
+        self.selected_currency = "من الحساب المختار"
         if debt_id:
             row = next((d for d in self.debts if d["id"] == debt_id), None)
             if row is None:
                 self.error = "الدين غير موجود أو غير متاح لهذه الأسرة."
                 return
             self.edit_id = debt_id
+            self.selected_currency = row["currency"]
             self.draft = {
                 "title": row["title"],
                 "direction": row["direction"],
@@ -542,6 +692,7 @@ class DebtState(rx.State):
                 "first_due_date": row["first_due_date"],
                 "installment_count": row["installment_count"],
                 "note": row["note"],
+                "account_id": row["account_id"],
             }
         self.editor = "debt"
 
@@ -551,7 +702,63 @@ class DebtState(rx.State):
         if not any(d["id"] == debt_id for d in self.debts):
             self.error = "الدين غير موجود أو غير متاح لهذه الأسرة."
             return
+        row = next(d for d in self.debts if d["id"] == debt_id)
+        if not row["linked"]:
+            self.error = (
+                "أسند الدين القديم إلى حساب وعملة قبل تسجيل دفعات جديدة."
+            )
+            return
+        self.selected_currency = row["currency"]
         self.edit_id, self.editor = debt_id, "payment"
+
+    @rx.event
+    def open_assignment(self, debt_id: str):
+        self.error = self.message = ""
+        row = next(
+            (
+                d
+                for d in [*self.debts, *self.archived_debts]
+                if d["id"] == debt_id and not d["linked"]
+            ),
+            None,
+        )
+        if row is None:
+            self.error = "الدين غير متاح للإسناد."
+            return
+        self.edit_id, self.editor = debt_id, "assign"
+
+    @rx.event
+    async def assign_debt(self, data: dict[str, Any]):
+        try:
+            if self.editor != "assign":
+                raise ValueError("افتح نموذج الإسناد أولًا.")
+            auth = await self.get_state(AuthState)
+            async with rx.asession() as db:
+
+                def assign_sync(sync_db):
+                    user, member = auth._household(sync_db)
+                    self._assign(
+                        sync_db,
+                        member.household_id,
+                        user.id,
+                        self.edit_id,
+                        data,
+                    )
+                    self._load(sync_db, member.household_id, user.id)
+
+                await db.run_sync(assign_sync)
+                await db.commit()
+            self.close_editor.fn(self)
+            self.message = "أُسند الحساب وعملته صراحة؛ لم تتغير الأقساط أو الدفعات السابقة أو أرصدة الحسابات."
+        except PermissionError:
+            logging.exception("Unexpected error")
+            return rx.redirect("/login")
+        except ValueError as e:
+            self.error = str(e)
+        except Exception as e:
+            logging.exception(f"Error: {e}")
+            report_unexpected("debts.assign", e)
+            self.error = "تعذر إسناد الدين. حاول مجددًا."
 
     @rx.event
     def ask_void(self, debt_id: str, payment_id: str):
@@ -588,7 +795,7 @@ class DebtState(rx.State):
                         data,
                         self.edit_id,
                     )
-                    self._load(sync_db, member.household_id)
+                    self._load(sync_db, member.household_id, user.id)
 
                 await db.run_sync(save_sync)
                 await db.commit()
@@ -621,7 +828,7 @@ class DebtState(rx.State):
                         self.edit_id,
                         data,
                     )
-                    self._load(sync_db, member.household_id)
+                    self._load(sync_db, member.household_id, user.id)
 
                 await db.run_sync(save_sync)
                 await db.commit()
@@ -654,7 +861,7 @@ class DebtState(rx.State):
                         self.edit_id,
                         self.void_id,
                     )
-                    self._load(sync_db, member.household_id)
+                    self._load(sync_db, member.household_id, user.id)
 
                 await db.run_sync(void_sync)
                 await db.commit()
@@ -681,7 +888,7 @@ class DebtState(rx.State):
                     self._archive(
                         sync_db, member.household_id, user.id, debt_id, archived
                     )
-                    self._load(sync_db, member.household_id)
+                    self._load(sync_db, member.household_id, user.id)
 
                 await db.run_sync(archive_sync)
                 await db.commit()

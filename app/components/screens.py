@@ -1236,7 +1236,7 @@ def goals() -> rx.Component:
     )
 
 
-def debt_installment(item: InstallmentRow) -> rx.Component:
+def debt_installment(item: InstallmentRow, currency: str) -> rx.Component:
     return rx.el.li(
         rx.el.div(
             rx.el.span(
@@ -1258,7 +1258,7 @@ def debt_installment(item: InstallmentRow) -> rx.Component:
             class_name="flex flex-wrap items-center justify-between gap-2",
         ),
         rx.el.p(
-            f"القسط {item['amount']} · المدفوع {item['paid']} · المتبقي {item['remaining']} {S.currency}",
+            f"القسط {item['amount']} · المدفوع {item['paid']} · المتبقي {item['remaining']} {currency}",
             class_name="mt-2 text-sm tabular-nums text-[#7c8178]",
         ),
         class_name="border-b border-[#eeebe2] py-3 last:border-0",
@@ -1266,12 +1266,12 @@ def debt_installment(item: InstallmentRow) -> rx.Component:
 
 
 def debt_payment(
-    item: PaymentRow, debt_id: str, archived: bool
+    item: PaymentRow, debt_id: str, archived: bool, currency: str
 ) -> rx.Component:
     return rx.el.li(
         rx.el.div(
             rx.el.span(
-                f"{item['date']} · {item['amount']} {S.currency}",
+                f"{item['date']} · {item['amount']} {currency}",
                 class_name="font-semibold tabular-nums",
             ),
             rx.cond(
@@ -1336,7 +1336,7 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
             class_name="flex flex-wrap items-start justify-between gap-3",
         ),
         rx.el.p(
-            f"الطرف الآخر: {row['counterparty']}",
+            f"الطرف الآخر: {row['counterparty']} · {row['account']} · {row['currency']}",
             class_name="mt-4 break-words text-sm text-[#7c8178]",
         ),
         rx.cond(
@@ -1350,26 +1350,28 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
             rx.el.div(
                 rx.el.span("أصل الدين", class_name="text-xs text-[#7c8178]"),
                 rx.el.strong(
-                    row["principal"], class_name="block font-bold tabular-nums"
+                    f"{row['principal']} {row['currency']}",
+                    class_name="block font-bold tabular-nums",
                 ),
             ),
             rx.el.div(
                 rx.el.span("المدفوع", class_name="text-xs text-[#7c8178]"),
                 rx.el.strong(
-                    row["paid"],
+                    f"{row['paid']} {row['currency']}",
                     class_name="block font-bold tabular-nums text-[#62704b]",
                 ),
             ),
             rx.el.div(
                 rx.el.span("المتبقي", class_name="text-xs text-[#7c8178]"),
                 rx.el.strong(
-                    row["remaining"], class_name="block font-bold tabular-nums"
+                    f"{row['remaining']} {row['currency']}",
+                    class_name="block font-bold tabular-nums",
                 ),
             ),
             class_name="my-5 grid grid-cols-3 gap-3 rounded-xl bg-[#f6f4ec] p-4 text-sm",
         ),
         rx.el.p(
-            f"المتأخر: {row['overdue']} {S.currency}",
+            f"المتأخر: {row['overdue']} {row['currency']}",
             class_name="text-sm font-semibold tabular-nums text-[#a26550]",
         ),
         rx.cond(
@@ -1385,7 +1387,10 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
                 class_name="cursor-pointer text-sm font-bold text-[#62704b]",
             ),
             rx.el.ol(
-                rx.foreach(row["installments"], debt_installment),
+                rx.foreach(
+                    row["installments"],
+                    lambda item: debt_installment(item, row["currency"]),
+                ),
                 class_name="mt-2",
             ),
             class_name="mt-5 border-t border-[#eeebe2] pt-4",
@@ -1400,7 +1405,9 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
                 rx.el.ul(
                     rx.foreach(
                         row["history"],
-                        lambda item: debt_payment(item, row["id"], archived),
+                        lambda item: debt_payment(
+                            item, row["id"], archived, row["currency"]
+                        ),
                     ),
                     class_name="mt-2",
                 ),
@@ -1409,6 +1416,20 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
                 ),
             ),
             class_name="mt-4 border-t border-[#eeebe2] pt-4",
+        ),
+        rx.cond(
+            ~row["linked"],
+            rx.el.div(
+                rx.el.p(
+                    "دين قديم: الحساب والعملة غير محددين؛ لا يدخل في إجماليات العملات ولا التذكيرات. الإسناد للمالك فقط ولا يغير مبالغ الدفعات السابقة.",
+                    class_name="mt-4 text-sm leading-7 text-[#a26550]",
+                ),
+                rx.el.button(
+                    "إسناد الحساب والعملة",
+                    on_click=lambda: D.open_assignment(row["id"]),
+                    class_name=SECONDARY,
+                ),
+            ),
         ),
         rx.el.div(
             rx.cond(
@@ -1421,7 +1442,7 @@ def debt_card(row: DebtRow, archived: bool = False) -> rx.Component:
                 ),
                 rx.el.div(
                     rx.cond(
-                        row["remaining"] != "0.0000",
+                        (row["remaining"] != "0.0000") & row["linked"],
                         rx.el.button(
                             t("action.record_payment"),
                             on_click=lambda: D.open_payment(row["id"]),
@@ -1464,6 +1485,7 @@ def debt_dialog() -> rx.Component:
                                 ),
                             ),
                             ("payment", "تسجيل دفعة"),
+                            ("assign", "إسناد الحساب والعملة للدين القديم"),
                             "تأكيد إلغاء الدفعة",
                         ),
                         class_name="text-xl font-bold",
@@ -1493,6 +1515,19 @@ def debt_dialog() -> rx.Component:
                     (
                         "debt",
                         rx.el.form(
+                            rx.cond(
+                                D.edit_id == "",
+                                select_field(
+                                    "الحساب الظاهر وعملته",
+                                    "account_id",
+                                    D.accounts,
+                                    D.draft["account_id"],
+                                ),
+                                rx.el.p(
+                                    f"العملة: {D.selected_currency}. لا يمكن نقل حساب أو عملة دين قائم. استخدم إسناد الدين القديم المنفصل عند الحاجة.",
+                                    class_name="text-sm leading-7 text-[#62704b]",
+                                ),
+                            ),
                             field(
                                 "عنوان الدين", "title", default=D.draft["title"]
                             ),
@@ -1553,7 +1588,7 @@ def debt_dialog() -> rx.Component:
                     (
                         "payment",
                         rx.el.form(
-                            field("المبلغ", "amount"),
+                            field(f"المبلغ ({D.selected_currency})", "amount"),
                             field("تاريخ الدفعة", "paid_on", "date", D.today),
                             field("ملاحظة (اختياري)", "note", required=False),
                             rx.el.button(
@@ -1562,6 +1597,38 @@ def debt_dialog() -> rx.Component:
                                 class_name=BUTTON,
                             ),
                             on_submit=D.save_payment,
+                            key=D.edit_id,
+                            class_name="space-y-4",
+                        ),
+                    ),
+                    (
+                        "assign",
+                        rx.el.form(
+                            rx.el.p(
+                                "اختر حسابًا نشطًا بعد التحقق من العملة الأصلية. الإسناد نهائي؛ لا تحويل عملات ولا تعديل للدفعات السابقة. لا توافق إن لم تكن متأكدًا.",
+                                class_name="text-sm leading-7 text-[#a26550]",
+                            ),
+                            select_field(
+                                "الحساب وعملة الإسناد",
+                                "account_id",
+                                D.accounts,
+                                "",
+                            ),
+                            rx.el.label(
+                                rx.el.input(
+                                    type="checkbox",
+                                    name="confirm_history",
+                                    class_name="accent-[#62704b]",
+                                ),
+                                "أؤكد أن أصل الدين وجميع الأقساط والدفعات السابقة، حتى الملغاة، كانت بعملة الحساب المختار، دون تحويل أو تغيير مبالغها.",
+                                class_name="flex items-start gap-2 text-sm leading-7 text-[#62704b]",
+                            ),
+                            rx.el.button(
+                                "تأكيد الإسناد",
+                                type="submit",
+                                class_name=BUTTON,
+                            ),
+                            on_submit=D.assign_debt,
                             key=D.edit_id,
                             class_name="space-y-4",
                         ),
@@ -1615,7 +1682,7 @@ def debts() -> rx.Component:
             rx.el.div(
                 rx.icon("info", class_name="h-5 w-5 shrink-0"),
                 rx.el.p(
-                    f"الديون والأقساط مقومة بعملة الأسرة الأساسية {S.currency} فقط. هذا سجل يدوي: لا ننشئ معاملات أو نغيّر الأرصدة والتدفقات. سجّل الدفع أو القبض الفعلي منفصلًا في دفتر المعاملات دون تكرار."
+                    "كل دين مرتبط بحساب ظاهر وعملته؛ الإجماليات منفصلة دون جمع العملات. الديون القديمة غير المسندة لا تُنسب لعملة بالتخمين. هذا سجل يدوي لا يغيّر أرصدة الحسابات؛ سجّل الدفع أو القبض الفعلي منفصلًا دون تكرار."
                 ),
                 class_name="mb-6 flex gap-3 rounded-xl border border-[#dce0ce] bg-[#edf0e3] p-4 text-sm leading-7 text-[#62704b]",
             ),
@@ -1640,9 +1707,12 @@ def debts() -> rx.Component:
                     rx.el.span(
                         "المتبقي علينا", class_name="text-sm text-[#7c8178]"
                     ),
-                    rx.el.strong(
-                        f"{D.payable_total} {S.currency}",
-                        class_name="mt-3 block text-xl font-bold tabular-nums",
+                    rx.foreach(
+                        D.currency_totals,
+                        lambda total: rx.el.strong(
+                            f"{total['payable']} {total['currency']}",
+                            class_name="mt-3 block text-xl font-bold tabular-nums",
+                        ),
                     ),
                     rx.el.p(
                         f"{D.payable_overdue_count} ديون متأخرة",
@@ -1654,9 +1724,12 @@ def debts() -> rx.Component:
                     rx.el.span(
                         "المتبقي لنا", class_name="text-sm text-[#7c8178]"
                     ),
-                    rx.el.strong(
-                        f"{D.receivable_total} {S.currency}",
-                        class_name="mt-3 block text-xl font-bold tabular-nums",
+                    rx.foreach(
+                        D.currency_totals,
+                        lambda total: rx.el.strong(
+                            f"{total['receivable']} {total['currency']}",
+                            class_name="mt-3 block text-xl font-bold tabular-nums",
+                        ),
                     ),
                     rx.el.p(
                         f"{D.receivable_overdue_count} ديون متأخرة",
@@ -1672,6 +1745,10 @@ def debts() -> rx.Component:
                     rx.el.strong(
                         D.overdue_count,
                         class_name="mt-4 block text-3xl font-bold text-[#a26550]",
+                    ),
+                    rx.el.p(
+                        f"{D.legacy_count} ديون نشطة بعملة غير محددة؛ مستبعدة من المبالغ الإجمالية.",
+                        class_name="mt-2 text-sm text-[#7c8178]",
                     ),
                     class_name=CARD,
                 ),

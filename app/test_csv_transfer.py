@@ -30,6 +30,19 @@ class CsvTransferTests(unittest.TestCase):
             row = dict(zip(HEADERS[kind], SAMPLES[kind]))
             validate_row(kind, row)
 
+    def test_debt_unlinked_and_old_template_rejected_without_currency_guess(
+        self,
+    ):
+        for kind in ("debts", "debt_installments", "debt_payments"):
+            row = dict(zip(HEADERS[kind], SAMPLES[kind]))
+            row.update(account_name="", currency="", account_source_id="")
+            with self.assertRaisesRegex(ValueError, "أسند"):
+                validate_row(kind, row)
+            old_headers = HEADERS[kind][3:]
+            old = f"{','.join(old_headers)}\n{','.join(SAMPLES[kind][3:])}".encode()
+            with self.assertRaisesRegex(ValueError, "القالب الجديد"):
+                parse_csv(kind, old)
+
     def test_budget_zero_and_bill_status(self):
         row = dict(zip(HEADERS["budgets"], SAMPLES["budgets"]))
         row["amount"] = "0"
@@ -436,6 +449,10 @@ class CsvTransferTests(unittest.TestCase):
 
     def test_schedule_verification_and_payment_limits(self):
         hid, uid = uuid4(), uuid4()
+        account = SimpleNamespace(
+            id=uuid4(), name="محفظة البيت", currency="SAR", is_archived=False
+        )
+        member
         member = SimpleNamespace(household_id=hid, user_id=uid, role="owner")
         debt = SimpleNamespace(
             id=uuid4(),
@@ -446,6 +463,8 @@ class CsvTransferTests(unittest.TestCase):
             first_due_date=date(2025, 1, 10),
             installment_count=12,
             is_archived=False,
+            account_id=account.id,
+            currency="SAR",
         )
         installment = SimpleNamespace(
             id=uuid4(),
@@ -458,7 +477,7 @@ class CsvTransferTests(unittest.TestCase):
             zip(HEADERS["debt_installments"], SAMPLES["debt_installments"])
         )
         row.update(_line="2", debt_source_id=str(debt.id))
-        db = self.financial_db([], [debt], [installment])
+        db = self.financial_db([account], [debt], [installment])
         self.assertEqual(
             import_rows(
                 db,
@@ -471,7 +490,7 @@ class CsvTransferTests(unittest.TestCase):
             (0, 1),
         )
         row["amount"] = "99"
-        db = self.financial_db([], [debt], [installment])
+        db = self.financial_db([account], [debt], [installment])
         with self.assertRaisesRegex(ValueError, "الصف 2"):
             import_rows(
                 db,
@@ -484,7 +503,7 @@ class CsvTransferTests(unittest.TestCase):
         db.commit.assert_not_called()
         payment = dict(zip(HEADERS["debt_payments"], SAMPLES["debt_payments"]))
         payment.update(_line="3", debt_source_id=str(debt.id), amount="1201")
-        db = self.financial_db([], [debt], [])
+        db = self.financial_db([account], [debt], [])
         with self.assertRaisesRegex(ValueError, "الصف 3"):
             import_rows(
                 db,
@@ -496,7 +515,7 @@ class CsvTransferTests(unittest.TestCase):
             )
         db.commit.assert_not_called()
         payment.update(amount="1200", voided="true")
-        db = self.financial_db([], [debt], [])
+        db = self.financial_db([account], [debt], [])
         self.assertEqual(
             import_rows(
                 db,
@@ -516,7 +535,11 @@ class CsvTransferTests(unittest.TestCase):
         row = dict(zip(HEADERS["debts"], SAMPLES["debts"]))
         row.update(_line="2", source_id=str(uuid4()), is_archived="true")
         db = Mock()
-        db.scalars.return_value.all.side_effect = [[], [], []]
+        account = SimpleNamespace(
+            id=uuid4(), name="محفظة البيت", currency="SAR", is_archived=False
+        )
+        db.scalars.return_value.all.side_effect = [[account], [], []]
+        db.scalar.return_value = None
         result = import_rows(
             db, SimpleNamespace(id=uid), member, "debts", [row], Mock()
         )
@@ -563,6 +586,10 @@ class CsvTransferTests(unittest.TestCase):
 
     def test_payment_reimport_idempotent_and_conflict_rolls_back(self):
         hid, uid = uuid4(), uuid4()
+        account = SimpleNamespace(
+            id=uuid4(), name="محفظة البيت", currency="SAR", is_archived=False
+        )
+        member
         member = SimpleNamespace(household_id=hid, user_id=uid, role="owner")
         debt = SimpleNamespace(
             id=uuid4(),
@@ -571,6 +598,9 @@ class CsvTransferTests(unittest.TestCase):
             direction="payable",
             first_due_date=date(2025, 1, 10),
             principal=Decimal("1200"),
+            account_id=account.id,
+            currency="SAR",
+            is_archived=False,
         )
         existing = SimpleNamespace(
             id=uuid4(),
@@ -584,7 +614,7 @@ class CsvTransferTests(unittest.TestCase):
         row.update(
             _line="2", debt_source_id=str(debt.id), source_id=str(existing.id)
         )
-        db = self.financial_db([], [debt], [existing])
+        db = self.financial_db([account], [debt], [existing])
         self.assertEqual(
             import_rows(
                 db,
@@ -598,7 +628,7 @@ class CsvTransferTests(unittest.TestCase):
         )
         db.add.assert_not_called()
         row["amount"] = "101"
-        db = self.financial_db([], [debt], [existing])
+        db = self.financial_db([account], [debt], [existing])
         with self.assertRaisesRegex(ValueError, "الصف 2"):
             import_rows(
                 db,

@@ -248,6 +248,8 @@ class BillState(rx.State):
                 m.Debt.household_id == hid,
                 m.Debt.direction == "payable",
                 m.Debt.is_archived.is_(False),
+                m.Debt.account_id.in_(visible),
+                m.Debt.currency.is_not(None),
             )
             .limit(500)
         ).all()
@@ -294,7 +296,7 @@ class BillState(rx.State):
                         f"قسط: {debt.title}",
                         f"القسط {item.sequence_no} · موعد السداد {item.due_date.isoformat()}",
                         remaining,
-                        currency,
+                        debt.currency,
                         "/debts",
                     )
         return candidates

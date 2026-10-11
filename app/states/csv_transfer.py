@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import UUID, uuid5
 
-from sqlalchemy import select
+from sqlalchemy import select, and_, or_
 
 from app import models as m
 from app.states.auth import (
@@ -76,6 +76,9 @@ HEADERS: dict[str, tuple[str, ...]] = {
         "source_id",
     ),
     "debts": (
+        "account_name",
+        "account_source_id",
+        "currency",
         "title",
         "counterparty",
         "direction",
@@ -87,6 +90,9 @@ HEADERS: dict[str, tuple[str, ...]] = {
         "source_id",
     ),
     "debt_installments": (
+        "account_name",
+        "account_source_id",
+        "currency",
         "debt_title",
         "counterparty",
         "direction",
@@ -97,6 +103,9 @@ HEADERS: dict[str, tuple[str, ...]] = {
         "amount",
     ),
     "debt_payments": (
+        "account_name",
+        "account_source_id",
+        "currency",
         "debt_title",
         "counterparty",
         "direction",
@@ -157,6 +166,9 @@ SAMPLES: dict[str, tuple[str, ...]] = {
         "",
     ),
     "debts": (
+        "محفظة البيت",
+        "",
+        "SAR",
         "قرض المنزل",
         "شركة التمويل",
         "payable",
@@ -168,6 +180,9 @@ SAMPLES: dict[str, tuple[str, ...]] = {
         "",
     ),
     "debt_installments": (
+        "محفظة البيت",
+        "",
+        "SAR",
         "قرض المنزل",
         "شركة التمويل",
         "payable",
@@ -178,6 +193,9 @@ SAMPLES: dict[str, tuple[str, ...]] = {
         "100.0000",
     ),
     "debt_payments": (
+        "محفظة البيت",
+        "",
+        "SAR",
         "قرض المنزل",
         "شركة التمويل",
         "payable",
@@ -222,6 +240,10 @@ def parse_csv(kind: str, data: bytes) -> list[dict[str, str]]:
         stream = io.StringIO(data.decode("utf-8-sig"), newline="")
         reader = csv.DictReader(stream, strict=True)
         if reader.fieldnames != list(HEADERS[kind]):
+            if kind in ("debts", "debt_installments", "debt_payments"):
+                raise ValueError(
+                    "عناوين قالب الديون قديمة أو غير مطابقة؛ نزّل القالب الجديد وحدد account_name وaccount_source_id وcurrency. أسند الديون القديمة يدويًا من صفحة الديون، دون تخمين عملة الدفعات."
+                )
             raise ValueError(
                 f"عناوين الأعمدة غير مطابقة. استخدم القالب: {', '.join(HEADERS[kind])}"
             )
@@ -416,6 +438,13 @@ def validate_row(kind: str, row: dict[str, str]) -> None:
         source_id(row)
         source_id(row, "account_source_id")
     elif kind in ("debts", "debt_installments", "debt_payments"):
+        if not row.get("account_name") or not row.get("currency"):
+            raise ValueError(
+                "استيراد الديون يتطلب حسابًا ظاهرًا وعملته؛ استخدم القالب الجديد. أسند السجلات القديمة يدويًا من صفحة الديون مع تأكيد عملة تاريخ الدفعات."
+            )
+        currency(row["currency"])
+        source_id(row, "account_source_id")
+        prefix
         prefix = "" if kind == "debts" else "debt_"
         if (
             not 1 <= len(row[f"{prefix}title"]) <= 120
@@ -621,12 +650,26 @@ def transfer_rows(db, member, kind: str) -> list[dict[str, str]]:
     if kind in ("debts", "debt_installments", "debt_payments"):
         debts = db.scalars(
             select(m.Debt)
-            .where(m.Debt.household_id == hid)
+            .where(
+                m.Debt.household_id == hid,
+                or_(
+                    and_(
+                        m.Debt.account_id.in_(allowed),
+                        m.Debt.currency.is_not(None),
+                    ),
+                    and_(m.Debt.account_id.is_(None), m.Debt.currency.is_(None))
+                    if member.role == "owner"
+                    else False,
+                ),
+            )
             .order_by(m.Debt.first_due_date, m.Debt.id)
         ).all()
         if kind == "debts":
             return [
                 {
+                    "account_name": names.get(d.account_id, ""),
+                    "account_source_id": str(d.account_id or ""),
+                    "currency": d.currency or "",
                     "title": d.title,
                     "counterparty": d.counterparty,
                     "direction": d.direction,
@@ -655,6 +698,9 @@ def transfer_rows(db, member, kind: str) -> list[dict[str, str]]:
             ).all()
             return [
                 {
+                    "account_name": names.get(by_id[i.debt_id].account_id, ""),
+                    "account_source_id": str(by_id[i.debt_id].account_id or ""),
+                    "currency": by_id[i.debt_id].currency or "",
                     "debt_title": by_id[i.debt_id].title,
                     "counterparty": by_id[i.debt_id].counterparty,
                     "direction": by_id[i.debt_id].direction,
@@ -680,6 +726,9 @@ def transfer_rows(db, member, kind: str) -> list[dict[str, str]]:
         ).all()
         return [
             {
+                "account_name": names.get(by_id[p.debt_id].account_id, ""),
+                "account_source_id": str(by_id[p.debt_id].account_id or ""),
+                "currency": by_id[p.debt_id].currency or "",
                 "debt_title": by_id[p.debt_id].title,
                 "counterparty": by_id[p.debt_id].counterparty,
                 "direction": by_id[p.debt_id].direction,
@@ -1107,10 +1156,17 @@ def import_financial_rows(
     ).all()
     visible = visible_account_ids(db, member, accounts)
     debts = (
-        db.scalars(select(m.Debt).where(m.Debt.household_id == hid)).all()
+        db.scalars(
+            select(m.Debt).where(
+                m.Debt.household_id == hid,
+                m.Debt.account_id.in_(visible),
+                m.Debt.currency.is_not(None),
+            )
+        ).all()
         if kind in ("debts", "debt_installments", "debt_payments")
         else []
     )
+    debts = [d for d in debts if d.account_id in visible and d.currency]
     model = {
         "transfers": m.AccountTransfer,
         "bills": m.Bill,
@@ -1118,7 +1174,16 @@ def import_financial_rows(
         "debt_payments": m.DebtPayment,
     }.get(kind)
     records = (
-        db.scalars(select(model).where(model.household_id == hid)).all()
+        db.scalars(
+            select(model).where(
+                model.household_id == hid,
+                *(
+                    [model.debt_id.in_([d.id for d in debts])]
+                    if kind in ("debt_installments", "debt_payments")
+                    else []
+                ),
+            )
+        ).all()
         if model
         else []
     )
@@ -1263,6 +1328,25 @@ def import_financial_rows(
                     **({"id": target} if target else {}),
                 )
             elif kind == "debts":
+                account = resolve_account(
+                    accounts,
+                    visible,
+                    row["account_name"],
+                    row["currency"],
+                    sid=source_id(row, "account_source_id"),
+                    household=hid,
+                )
+                if sid:
+                    source_debt = db.scalar(
+                        select(m.Debt).where(
+                            m.Debt.household_id == hid,
+                            m.Debt.id.in_([sid, uuid5(hid, sid.hex)]),
+                        )
+                    )
+                    if source_debt is not None and source_debt.id not in by_id:
+                        raise ValueError(
+                            "الدين غير متاح للاستيراد؛ أسند السجلات القديمة يدويًا من صفحة الديون أولًا."
+                        )
                 key = debt_identity(row)
                 candidates = [
                     d
@@ -1295,6 +1379,8 @@ def import_financial_rows(
                             }
                         )
                         != key
+                        or debt.account_id != account.id
+                        or debt.currency != account.currency
                         or debt.principal != money(row["principal"])
                         or debt.installment_count
                         != int(row["installment_count"])
@@ -1312,9 +1398,13 @@ def import_financial_rows(
                     else:
                         skipped += 1
                     continue
+                if account.is_archived:
+                    raise ValueError("الدين الجديد يتطلب حسابًا نشطًا ظاهرًا.")
                 obj = m.Debt(
                     household_id=hid,
                     created_by_user_id=user.id,
+                    account_id=account.id,
+                    currency=account.currency,
                     title=row["title"],
                     counterparty=row["counterparty"],
                     direction=row["direction"],
@@ -1348,6 +1438,21 @@ def import_financial_rows(
                 continue
             elif kind == "debt_installments":
                 debt = resolve_debt(debts, row, hid)
+                account = resolve_account(
+                    accounts,
+                    visible,
+                    row["account_name"],
+                    row["currency"],
+                    sid=source_id(row, "account_source_id"),
+                    household=hid,
+                )
+                if (
+                    debt.account_id != account.id
+                    or debt.currency != account.currency
+                ):
+                    raise ValueError(
+                        "حساب القسط وعملته لا يطابقان الدين؛ لن يتغير السجل التاريخي."
+                    )
                 entries = schedule(
                     debt.principal, debt.first_due_date, debt.installment_count
                 )
@@ -1373,6 +1478,21 @@ def import_financial_rows(
                 continue
             else:
                 debt = resolve_debt(debts, row, hid)
+                account = resolve_account(
+                    accounts,
+                    visible,
+                    row["account_name"],
+                    row["currency"],
+                    sid=source_id(row, "account_source_id"),
+                    household=hid,
+                )
+                if (
+                    debt.account_id != account.id
+                    or debt.currency != account.currency
+                ):
+                    raise ValueError(
+                        "حساب الدفعة وعملتها لا يطابقان الدين؛ لن يتغير السجل التاريخي."
+                    )
                 key = (
                     debt.id,
                     money(row["amount"]),
@@ -1399,6 +1519,10 @@ def import_financial_rows(
                 ):
                     skipped += 1
                     continue
+                if account.is_archived or debt.is_archived:
+                    raise ValueError(
+                        "استعد الحساب والدين قبل استيراد دفعات جديدة."
+                    )
                 if (
                     not key[4]
                     and paid.get(debt.id, Decimal(0)) + key[1] > debt.principal
