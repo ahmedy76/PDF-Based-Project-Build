@@ -444,7 +444,6 @@ def validate_row(kind: str, row: dict[str, str]) -> None:
             )
         currency(row["currency"])
         source_id(row, "account_source_id")
-        prefix
         prefix = "" if kind == "debts" else "debt_"
         if (
             not 1 <= len(row[f"{prefix}title"]) <= 120

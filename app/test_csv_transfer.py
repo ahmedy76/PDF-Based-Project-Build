@@ -452,7 +452,6 @@ class CsvTransferTests(unittest.TestCase):
         account = SimpleNamespace(
             id=uuid4(), name="محفظة البيت", currency="SAR", is_archived=False
         )
-        member
         member = SimpleNamespace(household_id=hid, user_id=uid, role="owner")
         debt = SimpleNamespace(
             id=uuid4(),
@@ -589,7 +588,6 @@ class CsvTransferTests(unittest.TestCase):
         account = SimpleNamespace(
             id=uuid4(), name="محفظة البيت", currency="SAR", is_archived=False
         )
-        member
         member = SimpleNamespace(household_id=hid, user_id=uid, role="owner")
         debt = SimpleNamespace(
             id=uuid4(),
